@@ -7,6 +7,7 @@ use eZ\Publish\API\Repository\Values\ContentType\ContentType;
 use eZ\Publish\API\Repository\Values\ContentType\FieldDefinition;
 use eZ\Publish\API\Repository\Exceptions\NotFoundException;
 use Kaliop\eZMigrationBundle\API\Collection\ContentTypeCollection;
+use Kaliop\eZMigrationBundle\API\Exception\InvalidStepDefinitionException;
 use Kaliop\eZMigrationBundle\API\MigrationGeneratorInterface;
 use Kaliop\eZMigrationBundle\API\EnumerableMatcherInterface;
 use Kaliop\eZMigrationBundle\API\ReferenceResolverInterface;
@@ -49,7 +50,7 @@ class ContentTypeManager extends RepositoryExecutor implements MigrationGenerato
     {
         foreach (array('identifier', 'content_type_group', 'name_pattern', 'name', 'attributes') as $key) {
             if (!isset($step->dsl[$key])) {
-                throw new \Exception("The '$key' key is missing in a content type creation definition");
+                throw new InvalidStepDefinitionExceptionn("The '$key' key is missing in a content type creation definition");
             }
         }
 
@@ -131,6 +132,8 @@ class ContentTypeManager extends RepositoryExecutor implements MigrationGenerato
     {
         $contentTypeCollection = $this->matchContentTypes('load', $step);
 
+        $this->validateResultsCount($contentTypeCollection, $step);
+
         $this->setReferences($contentTypeCollection, $step);
 
         return $contentTypeCollection;
@@ -143,12 +146,10 @@ class ContentTypeManager extends RepositoryExecutor implements MigrationGenerato
     {
         $contentTypeCollection = $this->matchContentTypes('update', $step);
 
-        if (count($contentTypeCollection) > 1 && array_key_exists('references', $step->dsl)) {
-            throw new \Exception("Can not execute Content Type update because multiple types match, and a references section is specified in the dsl. References can be set when only 1 type matches");
-        }
+        $this->validateResultsCount($contentTypeCollection, $step);
 
         if (count($contentTypeCollection) > 1 && array_key_exists('new_identifier', $step->dsl)) {
-            throw new \Exception("Can not execute Content Type update because multiple roles match, and a new_identifier is specified in the dsl.");
+            throw new \Exception("Can not execute Content Type update because multiple Content Types match, and a new_identifier is specified in the dsl.");
         }
 
         $contentTypeService = $this->repository->getContentTypeService();
@@ -314,6 +315,8 @@ class ContentTypeManager extends RepositoryExecutor implements MigrationGenerato
     {
         $contentTypeCollection = $this->matchContentTypes('delete', $step);
 
+        $this->validateResultsCount($contentTypeCollection, $step);
+
         $this->setReferences($contentTypeCollection, $step);
 
         $contentTypeService = $this->repository->getContentTypeService();
@@ -333,7 +336,7 @@ class ContentTypeManager extends RepositoryExecutor implements MigrationGenerato
     protected function matchContentTypes($action, $step)
     {
         if (!isset($step->dsl['identifier']) && !isset($step->dsl['match'])) {
-            throw new \Exception("The identifier of a content type or a match condition is required to $action it");
+            throw new InvalidStepDefinitionException("The identifier of a content type or a match condition is required to $action it");
         }
 
         // Backwards compat
@@ -346,13 +349,16 @@ class ContentTypeManager extends RepositoryExecutor implements MigrationGenerato
         // convert the references passed in the match
         $match = $this->resolveReferencesRecursively($match);
 
-        return $this->contentTypeMatcher->match($match);
+        $tolerateMisses = isset($step->dsl['match_tolerate_misses']) ? $this->referenceResolver->resolveReference($step->dsl['match_tolerate_misses']) : false;
+
+        return $this->contentTypeMatcher->match($match, $tolerateMisses);
     }
 
     /**
      * @param ContentType $contentType
      * @param array $references the definitions of the references to set
      * @throws \InvalidArgumentException When trying to assign a reference to an unsupported attribute
+     * @throws InvalidStepDefinitionException
      * @return array key: the reference names, values: the reference values
      */
     protected function getReferencesValues($contentType, array $references, $step)
@@ -360,7 +366,10 @@ class ContentTypeManager extends RepositoryExecutor implements MigrationGenerato
         $lang = $this->getLanguageCode($step);
         $refs = array();
 
-        foreach ($references as $reference) {
+        foreach ($references as $key => $reference) {
+
+            $reference = $this->parseReferenceDefinition($key, $reference);
+
             switch ($reference['attribute']) {
                 case 'content_type_id':
                 case 'id':
@@ -432,7 +441,7 @@ class ContentTypeManager extends RepositoryExecutor implements MigrationGenerato
                         break;
                     }
 
-                    throw new \InvalidArgumentException('Content Type Manager does not support setting references for attribute ' . $reference['attribute']);
+                    throw new InvalidStepDefinitionException('Content Type Manager does not support setting references for attribute ' . $reference['attribute']);
             }
 
             $refs[$reference['identifier']] = $value;
@@ -594,7 +603,7 @@ class ContentTypeManager extends RepositoryExecutor implements MigrationGenerato
     protected function createFieldDefinition(ContentTypeService $contentTypeService, array $attribute, $contentTypeIdentifier, $lang)
     {
         if (!isset($attribute['identifier']) || !isset($attribute['type'])) {
-            throw new \Exception("Keys 'type' and 'identifier' are mandatory to define a new field in a field type");
+            throw new InvalidStepDefinitionException("Keys 'type' and 'identifier' are mandatory to define a new field in a field type");
         }
 
         $fieldDefinition = $contentTypeService->newFieldDefinitionCreateStruct(
@@ -661,7 +670,7 @@ class ContentTypeManager extends RepositoryExecutor implements MigrationGenerato
     protected function updateFieldDefinition(ContentTypeService $contentTypeService, array $attribute, $fieldTypeIdentifier, $contentTypeIdentifier, $lang, FieldDefinition $existingFieldDefinition)
     {
         if (!isset($attribute['identifier'])) {
-            throw new \Exception("The 'identifier' of an attribute is missing in the content type update definition.");
+            throw new InvalidStepDefinitionException("The 'identifier' of an attribute is missing in the content type update definition.");
         }
 
         $fieldDefinitionUpdateStruct = $contentTypeService->newFieldDefinitionUpdateStruct();

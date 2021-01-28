@@ -54,6 +54,7 @@ class MigrateCommand extends AbstractCommand
             ->addOption('separate-process', 'p', InputOption::VALUE_NONE, "Use a separate php process to run each migration. Safe if your migration leak memory. A tad slower")
             ->addOption('force-sigchild-enabled', null, InputOption::VALUE_NONE, "When using a separate php process to run each migration, tell Symfony that php was compiled with --enable-sigchild option")
             ->addOption('survive-disconnected-tty', null, InputOption::VALUE_NONE, "Keep on executing migrations even if the tty where output is written to gets removed. Useful if you run the command over an unstable ssh connection")
+            ->addOption('set-reference', null, InputOption::VALUE_OPTIONAL | InputOption::VALUE_IS_ARRAY, "Inject references into the migrations. Format: --set-reference refname:value --set-reference ref2name:value2")
             ->addOption('child', null, InputOption::VALUE_NONE, "*DO NOT USE* Internal option for when forking separate processes")
             ->setHelp(<<<EOT
 The <info>kaliop:migration:migrate</info> command loads and executes migrations:
@@ -63,6 +64,8 @@ The <info>kaliop:migration:migrate</info> command loads and executes migrations:
 You can optionally specify the path to migration definitions with <info>--path</info>:
 
     <info>./ezpublish/console kaliop:migrations:migrate --path=/path/to/bundle/version_directory --path=/path/to/bundle/version_directory/single_migration_file</info>
+
+Use -v and -vv options to get troubleshooting information on the execution of each step in the migration(s).
 EOT
             );
     }
@@ -88,6 +91,7 @@ EOT
         $this->getContainer()->get('ez_migration_bundle.step_executed_listener.tracing')->setOutput($output);
 
         $migrationService = $this->getMigrationService();
+        $migrationService->setOutput($output);
 
         $force = $input->getOption('force');
 
@@ -126,6 +130,17 @@ EOT
             Process::forceSigchildEnabled(true);
         }
 
+        if ($input->getOption('set-reference') && !$input->getOption('separate-process')) {
+            $refResolver = $this->getContainer()->get('ez_migration_bundle.reference_resolver.customreference');
+            foreach($input->getOption('set-reference') as $refSpec) {
+                $ref = explode(':', $refSpec, 2);
+                if (count($ref) < 2 || $ref[0] === '') {
+                    throw new \Exception("Invalid reference specification: '$refSpec'");
+                }
+                $refResolver->addReference($ref[0], $ref[1], true);
+            }
+        }
+
         $aborted = false;
         $executed = 0;
         $failed = 0;
@@ -142,7 +157,11 @@ EOT
                 continue;
             }
 
-            $this->writeln("<info>Processing $name</info>");
+            if ($this->verbosity >= OutputInterface::VERBOSITY_VERBOSE) {
+                $this->writeln("<info>Processing $name (from definition $migrationDefinition->path)</info>");
+            } else {
+                $this->writeln("<info>Processing $name</info>");
+            }
 
             if ($input->getOption('separate-process')) {
 
@@ -213,9 +232,9 @@ EOT
         $time = microtime(true) - $start;
         if ($input->getOption('separate-process')) {
             // in case of using subprocesses, we can not measure max memory used
-            $this->writeln("<info>Time taken: ".sprintf('%.2f', $time)." secs</info>");
+            $this->writeln("<info>Time taken: ".sprintf('%.3f', $time)." secs</info>");
         } else {
-            $this->writeln("<info>Time taken: ".sprintf('%.2f', $time)." secs, memory: ".sprintf('%.2f', (memory_get_peak_usage(true) / 1000000)). ' MB</info>');
+            $this->writeln("<info>Time taken: ".sprintf('%.3f', $time)." secs, memory: ".sprintf('%.2f', (memory_get_peak_usage(true) / 1000000)). ' MB</info>');
         }
 
         return $failed;
@@ -322,7 +341,7 @@ EOT
      * @param bool $force when true, look not only for TODO migrations, but also DONE, SKIPPED, FAILED ones (we still omit STARTED and SUSPENDED ones)
      * @return MigrationDefinition[]
      *
-     * @todo this does not scale well with many definitions or migrations
+     * @todo optimize. This does not scale well with many definitions or migrations
      */
     protected function buildMigrationsList($paths, $migrationService, $force = false)
     {
@@ -342,17 +361,22 @@ EOT
             }
         }
 
-        // if user wants to execute 'all' migrations: look for some which are registered in the database even if not
+        // if user wants to execute 'all' migrations: look for those which are registered in the database even if not
         // found by the loader
         if (empty($paths)) {
             foreach ($migrations as $migration) {
                 if (in_array($migration->status, $allowedStatuses) && !isset($toExecute[$migration->name])) {
-                    $migrationDefinitions = $migrationService->getMigrationsDefinitions(array($migration->path));
-                    if (count($migrationDefinitions)) {
-                        $migrationDefinition = reset($migrationDefinitions);
-                        $toExecute[$migration->name] = $migrationService->parseMigrationDefinition($migrationDefinition);
-                    } else {
-                        // q: shall we raise a warning here ?
+                    try {
+                        $migrationDefinitions = $migrationService->getMigrationsDefinitions(array($migration->path));
+                        if (count($migrationDefinitions)) {
+                            // q: shall we raise a warning here if migrations found > 1?
+                            $migrationDefinition = $migrationDefinitions->reset();
+                            $toExecute[$migration->name] = $migrationService->parseMigrationDefinition($migrationDefinition);
+                        } else {
+                            throw new \Exception("Migration definition not found at path '$migration->path'");
+                        }
+                    } catch (\Exception $e) {
+                        $this->writeErrorln("Error while loading definition for migration '{$migration->name}' registered in the database, skipping it: " . $e->getMessage());
                     }
                 }
             }
@@ -466,14 +490,18 @@ EOT
         if ($input->getOption('force')) {
             $builderArgs[] = '--force';
         }
-        if ($input->getOption('no-transactions')) {
-            $builderArgs[] = '--no-transactions';
-        }
         // useful in case the subprocess has a migration step of type process/run
         if ($input->getOption('force-sigchild-enabled')) {
             $builderArgs[] = '--force-sigchild-enabled';
         }
-
+        if ($input->getOption('no-transactions')) {
+            $builderArgs[] = '--no-transactions';
+        }
+        if ($input->getOption('set-reference')) {
+            foreach($input->getOption('set-reference') as $refSpec) {
+                $builderArgs[] = '--set-reference=' . $refSpec;
+            }
+        }
         return $builderArgs;
     }
 

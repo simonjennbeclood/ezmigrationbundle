@@ -5,6 +5,7 @@ namespace Kaliop\eZMigrationBundle\Core\StorageHandler\Database;
 use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 use Doctrine\DBAL\Schema\Schema;
 use eZ\Publish\Core\Persistence\Database\DatabaseHandler;
+use eZ\Publish\Core\Persistence\Database\QueryException;
 use eZ\Publish\Core\Persistence\Database\SelectQuery;
 use Kaliop\eZMigrationBundle\API\StorageHandlerInterface;
 use Kaliop\eZMigrationBundle\API\Collection\MigrationCollection;
@@ -26,11 +27,12 @@ class Migration extends TableStorage implements StorageHandlerInterface
      * @param DatabaseHandler $dbHandler
      * @param string $tableNameParameter
      * @param ConfigResolverInterface $configResolver
+     * @param array $tableCreationOptions
      * @throws \Exception
      */
-    public function __construct(DatabaseHandler $dbHandler, $tableNameParameter = 'kaliop_migrations', ConfigResolverInterface $configResolver = null)
+    public function __construct(DatabaseHandler $dbHandler, $tableNameParameter = 'kaliop_migrations', ConfigResolverInterface $configResolver = null, $tableCreationOptions = array())
     {
-        parent::__construct($dbHandler, $tableNameParameter, $configResolver);
+        parent::__construct($dbHandler, $tableNameParameter, $configResolver, $tableCreationOptions);
     }
 
     /**
@@ -40,7 +42,7 @@ class Migration extends TableStorage implements StorageHandlerInterface
      */
     public function loadMigrations($limit = null, $offset = null)
     {
-        return $this->loadMigrationsInner(null, $limit, $offset);
+        return $this->loadMigrationsInner(null, null, $limit, $offset);
     }
 
     /**
@@ -51,16 +53,22 @@ class Migration extends TableStorage implements StorageHandlerInterface
      */
     public function loadMigrationsByStatus($status, $limit = null, $offset = null)
     {
-        return $this->loadMigrationsInner($status, $limit, $offset);
+        return $this->loadMigrationsInner($status, null, $limit, $offset);
+    }
+
+    public function loadMigrationsByPaths($paths, $limit = null, $offset = null)
+    {
+        return $this->loadMigrationsInner(null, $paths, $limit, $offset);
     }
 
     /**
      * @param int $status
+     * @param null|string[] $paths
      * @param int $limit
      * @param int $offset
      * @return MigrationCollection
      */
-    protected function loadMigrationsInner($status = null, $limit = null, $offset = null)
+    protected function loadMigrationsInner($status = null, $paths = array(), $limit = null, $offset = null)
     {
         $this->createTableIfNeeded();
 
@@ -69,8 +77,20 @@ class Migration extends TableStorage implements StorageHandlerInterface
         $q->select($this->fieldList)
             ->from($this->tableName)
             ->orderBy('migration', SelectQuery::ASC);
-        if ($status !== null) {
-            $q->where($q->expr->eq('status', $q->bindValue($status)));
+        if ($status !== null || (is_array($paths) && count($paths))) {
+            $exps = [];
+            if ($status !== null) {
+                $exps[] = $q->expr->eq('status', $q->bindValue($status));
+            }
+            if (is_array($paths) && count($paths)) {
+                $pexps = array();
+                foreach($paths as $path) {
+                    /// @todo use a proper db-aware escaping function
+                    $pexps[] = $q->expr->like('path', "'" . str_replace(array('_', '%', "'"), array('\_', '\%', "''"), $path).'%' . "'");
+                }
+                $exps[] = $q->expr->lor($pexps);
+            }
+            $q->where($q->expr->land($exps));
         }
         if ($limit > 0 || $offset > 0) {
             if ($limit <= 0) {
@@ -406,6 +426,9 @@ class Migration extends TableStorage implements StorageHandlerInterface
         $this->drop();
     }
 
+    /**
+     * @throws QueryException
+     */
     public function createTable()
     {
         /** @var \Doctrine\DBAL\Schema\AbstractSchemaManager $sm */
@@ -427,8 +450,21 @@ class Migration extends TableStorage implements StorageHandlerInterface
         // and 767 bytes can be either 255 chars or 191 chars depending on charset utf8 or utf8mb4...
         //$t->addIndex(array('path'));
 
+        $this->injectTableCreationOptions($t);
+
         foreach ($schema->toSql($dbPlatform) as $sql) {
-            $this->dbHandler->exec($sql);
+            try {
+                $this->dbHandler->exec($sql);
+            } catch(QueryException $e) {
+                // work around limitations in both Mysql and Doctrine
+                // @see https://github.com/kaliop-uk/ezmigrationbundle/issues/176
+                if (strpos($e->getMessage(), '1071 Specified key was too long; max key length is 767 bytes') !== false &&
+                    strpos($sql, 'PRIMARY KEY(migration)') !== false) {
+                    $this->dbHandler->exec(str_replace('PRIMARY KEY(migration)', 'PRIMARY KEY(migration(191))', $sql));
+                } else {
+                    throw $e;
+                }
+            }
         }
     }
 
@@ -458,6 +494,7 @@ class Migration extends TableStorage implements StorageHandlerInterface
 
     protected function getEntityName($migration)
     {
-        return end(explode('\\', get_class($migration)));
+        $arr = explode('\\', get_class($migration));
+        return end($arr);
     }
 }

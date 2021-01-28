@@ -3,6 +3,7 @@
 namespace Kaliop\eZMigrationBundle\Core\Executor;
 
 use eZ\Publish\API\Repository\Values\ObjectState\ObjectState;
+use Kaliop\eZMigrationBundle\API\Exception\InvalidStepDefinitionException;
 use Kaliop\eZMigrationBundle\Core\Matcher\ObjectStateGroupMatcher;
 use Kaliop\eZMigrationBundle\Core\Matcher\ObjectStateMatcher;
 use Kaliop\eZMigrationBundle\API\Collection\ObjectStateCollection;
@@ -49,12 +50,12 @@ class ObjectStateManager extends RepositoryExecutor implements MigrationGenerato
     {
         foreach (array('object_state_group', 'names', 'identifier') as $key) {
             if (!isset($step->dsl[$key])) {
-                throw new \Exception("The '$key' key is missing in a object state creation definition");
+                throw new InvalidStepDefinitionException("The '$key' key is missing in a object state creation definition");
             }
         }
 
         if (!count($step->dsl['names'])) {
-            throw new \Exception('No object state names have been defined. Need to specify at least one to create the state.');
+            throw new InvalidStepDefinitionException('No object state names have been defined. Need to specify at least one to create the state.');
         }
 
         $objectStateService = $this->repository->getObjectStateService();
@@ -87,6 +88,8 @@ class ObjectStateManager extends RepositoryExecutor implements MigrationGenerato
     {
         $stateCollection = $this->matchObjectStates('load', $step);
 
+        $this->validateResultsCount($stateCollection, $step);
+
         $this->setReferences($stateCollection, $step);
 
         return $stateCollection;
@@ -101,9 +104,7 @@ class ObjectStateManager extends RepositoryExecutor implements MigrationGenerato
     {
         $stateCollection = $this->matchObjectStates('update', $step);
 
-        if (count($stateCollection) > 1 && array_key_exists('references', $step->dsl)) {
-            throw new \Exception("Can not execute Object State update because multiple states match, and a references section is specified in the dsl. References can be set when only 1 state matches");
-        }
+        $this->validateResultsCount($stateCollection, $step);
 
         if (count($stateCollection) > 1 && isset($step->dsl['identifier'])) {
             throw new \Exception("Can not execute Object State update because multiple states match, and an identifier is specified in the dsl.");
@@ -142,6 +143,8 @@ class ObjectStateManager extends RepositoryExecutor implements MigrationGenerato
     {
         $stateCollection = $this->matchObjectStates('delete', $step);
 
+        $this->validateResultsCount($stateCollection, $step);
+
         $this->setReferences($stateCollection, $step);
 
         $objectStateService = $this->repository->getObjectStateService();
@@ -161,26 +164,29 @@ class ObjectStateManager extends RepositoryExecutor implements MigrationGenerato
     protected function matchObjectStates($action, $step)
     {
         if (!isset($step->dsl['match'])) {
-            throw new \Exception("A match condition is required to $action an object state");
+            throw new InvalidStepDefinitionException("A match condition is required to $action an object state");
         }
 
         // convert the references passed in the match
         $match = $this->resolveReferencesRecursively($step->dsl['match']);
 
-        return $this->objectStateMatcher->match($match);
+        $tolerateMisses = isset($step->dsl['match_tolerate_misses']) ? $this->referenceResolver->resolveReference($step->dsl['match_tolerate_misses']) : false;
+
+        return $this->objectStateMatcher->match($match, $tolerateMisses);
     }
 
     /**
      * @param ObjectState $objectState
      * @param array $references the definitions of the references to set
-     * @throws \InvalidArgumentException When trying to assign a reference to an unsupported attribute
+     * @throws InvalidStepDefinitionException
      * @return array key: the reference names, values: the reference values
      */
     protected function getReferencesValues($objectState, array $references, $step)
     {
         $refs = array();
 
-        foreach ($references as $reference) {
+        foreach ($references as $key => $reference) {
+            $reference = $this->parseReferenceDefinition($key, $reference);
             switch ($reference['attribute']) {
                 case 'object_state_id':
                 case 'id':
@@ -190,7 +196,7 @@ class ObjectStateManager extends RepositoryExecutor implements MigrationGenerato
                     $value = $objectState->priority;
                     break;
                 default:
-                    throw new \InvalidArgumentException('Object State Manager does not support setting references for attribute ' . $reference['attribute']);
+                    throw new InvalidStepDefinitionException('Object State Manager does not support setting references for attribute ' . $reference['attribute']);
             }
 
             $refs[$reference['identifier']] = $value;

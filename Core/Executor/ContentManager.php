@@ -2,23 +2,24 @@
 
 namespace Kaliop\eZMigrationBundle\Core\Executor;
 
-use eZ\Publish\API\Repository\Values\ContentType\ContentType;
-use eZ\Publish\API\Repository\Values\ContentType\FieldDefinition;
-use eZ\Publish\API\Repository\Values\Content\Location;
 use eZ\Publish\API\Repository\Values\Content\Content;
 use eZ\Publish\API\Repository\Values\Content\ContentCreateStruct;
 use eZ\Publish\API\Repository\Values\Content\ContentUpdateStruct;
+use eZ\Publish\API\Repository\Values\Content\VersionInfo;
+use eZ\Publish\API\Repository\Values\ContentType\ContentType;
+use eZ\Publish\API\Repository\Values\ContentType\FieldDefinition;
 use eZ\Publish\Core\Base\Exceptions\NotFoundException;
 use Kaliop\eZMigrationBundle\API\Collection\ContentCollection;
-use Kaliop\eZMigrationBundle\API\MigrationGeneratorInterface;
 use Kaliop\eZMigrationBundle\API\EnumerableMatcherInterface;
+use Kaliop\eZMigrationBundle\API\Exception\InvalidStepDefinitionException;
+use Kaliop\eZMigrationBundle\API\MigrationGeneratorInterface;
 use Kaliop\eZMigrationBundle\Core\FieldHandlerManager;
+use Kaliop\eZMigrationBundle\Core\Helper\SortConverter;
 use Kaliop\eZMigrationBundle\Core\Matcher\ContentMatcher;
+use Kaliop\eZMigrationBundle\Core\Matcher\ObjectStateGroupMatcher;
+use Kaliop\eZMigrationBundle\Core\Matcher\ObjectStateMatcher;
 use Kaliop\eZMigrationBundle\Core\Matcher\SectionMatcher;
 use Kaliop\eZMigrationBundle\Core\Matcher\UserMatcher;
-use Kaliop\eZMigrationBundle\Core\Matcher\ObjectStateMatcher;
-use Kaliop\eZMigrationBundle\Core\Matcher\ObjectStateGroupMatcher;
-use Kaliop\eZMigrationBundle\Core\Helper\SortConverter;
 use JmesPath\Env as JmesPath;
 
 /**
@@ -204,6 +205,8 @@ class ContentManager extends RepositoryExecutor implements MigrationGeneratorInt
     {
         $contentCollection = $this->matchContents('load', $step);
 
+        $this->validateResultsCount($contentCollection, $step);
+
         $this->setReferences($contentCollection, $step);
 
         return $contentCollection;
@@ -221,12 +224,10 @@ class ContentManager extends RepositoryExecutor implements MigrationGeneratorInt
 
         $contentCollection = $this->matchContents('update', $step);
 
-        if (count($contentCollection) > 1 && isset($step->dsl['references'])) {
-            throw new \Exception("Can not execute Content update because multiple contents match, and a references section is specified in the dsl. References can be set when only 1 content matches");
-        }
+        $this->validateResultsCount($contentCollection, $step);
 
         if (count($contentCollection) > 1 && isset($step->dsl['main_location'])) {
-            throw new \Exception("Can not execute Content update because multiple contents match, and a main_location section is specified in the dsl. References can be set when only 1 content matches");
+            throw new \Exception("Can not execute Content update because multiple contents match, and a main_location section is specified in the dsl.");
         }
 
         $contentType = array();
@@ -314,6 +315,8 @@ class ContentManager extends RepositoryExecutor implements MigrationGeneratorInt
     {
         $contentCollection = $this->matchContents('delete', $step);
 
+        $this->validateResultsCount($contentCollection, $step);
+
         $this->setReferences($contentCollection, $step);
 
         $contentService = $this->repository->getContentService();
@@ -338,7 +341,7 @@ class ContentManager extends RepositoryExecutor implements MigrationGeneratorInt
     protected function matchContents($action, $step)
     {
         if (!isset($step->dsl['object_id']) && !isset($step->dsl['remote_id']) && !isset($step->dsl['match'])) {
-            throw new \Exception("The id or remote id of an object or a match condition is required to $action a content");
+            throw new InvalidStepDefinitionException("The id or remote id of an object or a match condition is required to $action a content");
         }
 
         // Backwards compat
@@ -360,20 +363,25 @@ class ContentManager extends RepositoryExecutor implements MigrationGeneratorInt
         $limit = isset($step->dsl['match_limit']) ? $this->referenceResolver->resolveReference($step->dsl['match_limit']) : 0;
         $sort = isset($step->dsl['match_sort']) ? $this->referenceResolver->resolveReference($step->dsl['match_sort']) : array();
 
-        return $this->contentMatcher->match($match, $sort, $offset, $limit);
+        $tolerateMisses = isset($step->dsl['match_tolerate_misses']) ? $this->referenceResolver->resolveReference($step->dsl['match_tolerate_misses']) : false;
+
+        return $this->contentMatcher->match($match, $sort, $offset, $limit, $tolerateMisses);
     }
 
     /**
-     * @param Content $content
+     * @param Content|VersionInfo $content
      * @param array $references the definitions of the references to set
      * @throws \InvalidArgumentException When trying to assign a reference to an unsupported attribute
+     * @throws InvalidStepDefinitionException
      * @return array key: the reference names, values: the reference values
      */
     protected function getReferencesValues($content, array $references, $step)
     {
         $refs = array();
 
-        foreach ($references as $reference) {
+        foreach ($references as $key => $reference) {
+
+            $reference = $this->parseReferenceDefinition($key, $reference);
 
             switch ($reference['attribute']) {
                 case 'object_id':
@@ -464,6 +472,7 @@ class ContentManager extends RepositoryExecutor implements MigrationGeneratorInt
                             if (count($parts) == 2 && $fieldIdentifier === $parts[1]) {
                                 throw new \InvalidArgumentException('Content Manager does not support setting references for attribute ' . $reference['attribute'] . ': the given attribute has an array value');
                             }
+                            /// @todo this does not give any guarantees regarding the cardinality of the matched stuff...
                             $value = JmesPath::search(implode('.', array_slice($parts, 1)), array($fieldIdentifier => $hashValue));
                         } else {
                             if (count($parts) > 2) {
@@ -474,7 +483,7 @@ class ContentManager extends RepositoryExecutor implements MigrationGeneratorInt
                         break;
                     }
 
-                    throw new \InvalidArgumentException('Content Manager does not support setting references for attribute ' . $reference['attribute']);
+                    throw new InvalidStepDefinitionException('Content Manager does not support setting references for attribute ' . $reference['attribute']);
             }
 
             $refs[$reference['identifier']] = $value;
@@ -490,14 +499,20 @@ class ContentManager extends RepositoryExecutor implements MigrationGeneratorInt
      * @throws \Exception
      * @return array
      *
-     * @todo add support for dumping all object languages
      * @todo add 2ndary locations when in 'update' mode
      * @todo add dumping of sort_field and sort_order for 2ndary locations
+     * @todo allow context options to tweak the generated migrations eg:
+     *       - omit rids on create
+     *       - omit 2ndary locations on create
+     *       - viceversa, do a full creation of 2ndary locations on create (incl. visibility, priority)
+     *       - match by rid vs match by id on update and on delete
+     *       - etc...
      */
     public function generateMigration(array $matchCondition, $mode, array $context = array())
     {
         $currentUser = $this->authenticateUserByContext($context);
         $contentCollection = $this->contentMatcher->match($matchCondition);
+        /// @todo throw if nothing is matched?
         $data = array();
 
         /** @var \eZ\Publish\API\Repository\Values\Content\Content $content */
@@ -531,7 +546,7 @@ class ContentManager extends RepositoryExecutor implements MigrationGeneratorInt
                         )
                     );
                     $locationService = $this->repository->getLocationService();
-                    /// @todo for accurate replication, we should express the addinfg of 2ndary locatins as separate steps, and copy over visibility, priority etc
+                    /// @todo for accurate replication, we should express the adding of 2ndary locations as separate steps, and copy over visibility, priority etc
                     $locations = $locationService->loadLocations($content->contentInfo);
                     if (count($locations) > 1) {
                         $otherParentLocations = array();
@@ -572,18 +587,37 @@ class ContentManager extends RepositoryExecutor implements MigrationGeneratorInt
 
             if ($mode != 'delete') {
 
-                $attributes = array();
-                foreach ($content->getFieldsByLanguage($this->getLanguageCodeFromContext($context)) as $fieldIdentifier => $field) {
-                    $fieldDefinition = $contentType->getFieldDefinition($fieldIdentifier);
-                    $attributes[$field->fieldDefIdentifier] = $this->fieldHandlerManager->fieldValueToHash(
-                        $fieldDefinition->fieldTypeIdentifier, $contentType->identifier, $field->value
+                $language = $this->getLanguageCodeFromContext($context);
+                if ($language == 'all') {
+                    $languages = $content->versionInfo->languageCodes;
+                } else {
+                    $contentData = array_merge(
+                        $contentData,
+                        array(
+                            'lang' => $language,
+                        )
                     );
+                    $languages = array($language);
+                }
+
+                $attributes = array();
+                foreach($languages as $lang) {
+                    foreach ($content->getFieldsByLanguage($lang) as $fieldIdentifier => $field) {
+                        $fieldDefinition = $contentType->getFieldDefinition($fieldIdentifier);
+                        $fieldValue = $this->fieldHandlerManager->fieldValueToHash(
+                            $fieldDefinition->fieldTypeIdentifier, $contentType->identifier, $field->value
+                        );
+                        if ($language == 'all') {
+                            $attributes[$field->fieldDefIdentifier][$lang] = $fieldValue;
+                        } else {
+                            $attributes[$field->fieldDefIdentifier] = $fieldValue;
+                        }
+                    }
                 }
 
                 $contentData = array_merge(
                     $contentData,
                     array(
-                        'lang' => $this->getLanguageCodeFromContext($context),
                         'section' => $content->contentInfo->sectionId,
                         'owner' => $content->contentInfo->ownerId,
                         'modification_date' => $content->contentInfo->modificationDate->getTimestamp(),
@@ -794,11 +828,12 @@ class ContentManager extends RepositoryExecutor implements MigrationGeneratorInt
         $fieldTypeIdentifier = $fieldDefinition->fieldTypeIdentifier;
 
         if (is_array($value) || $this->fieldHandlerManager->managesField($fieldTypeIdentifier, $contentTypeIdentifier)) {
-            // since we now allow refs to be arrays, let's attempt a 1st pass at resolving them here instead of every single fieldHandler...
+            // since we now allow ref values to be arrays, let's attempt a 1st pass at resolving them here instead of every single fieldHandler...
             if (is_string($value) && $this->fieldHandlerManager->doPreResolveStringReferences($fieldTypeIdentifier, $contentTypeIdentifier)) {
                 $value = $this->referenceResolver->resolveReference($value);
             }
             // inject info about the current content type and field into the context
+            // q: why not let the fieldHandlerManager do that ?
             $context['contentTypeIdentifier'] = $contentTypeIdentifier;
             $context['fieldIdentifier'] = $fieldDefinition->identifier;
             return $this->fieldHandlerManager->hashToFieldValue($fieldTypeIdentifier, $contentTypeIdentifier, $value, $context);

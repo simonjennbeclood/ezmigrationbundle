@@ -186,7 +186,7 @@ EOT
 
         $time = microtime(true) - $start;
         // since we use subprocesses, we can not measure max memory used
-        $this->writeln("<info>Time taken: ".sprintf('%.2f', $time)." secs</info>");
+        $this->writeln("<info>Time taken: ".sprintf('%.3f', $time)." secs</info>");
 
         return $subprocessesFailed + $this->migrationsDone[Migration::STATUS_FAILED] + $missed;
     }
@@ -370,7 +370,7 @@ EOT
                 if (in_array($migration->status, $allowedStatuses) && !isset($toExecute[$migration->name])) {
                     $migrationDefinitions = $migrationService->getMigrationsDefinitions(array($migration->path));
                     if (count($migrationDefinitions)) {
-                        $migrationDefinition = reset($migrationDefinitions);
+                        $migrationDefinition = $migrationDefinitions->reset();
                         $toExecute[$migration->name] = $isChild ? $migrationService->parseMigrationDefinition($migrationDefinition) : $migrationDefinition;
                     } else {
                         // q: shall we raise a warning here ?
@@ -471,12 +471,6 @@ EOT
         if ($input->getOption('force')) {
             $builderArgs[] = '--force';
         }
-        if ($input->getOption('no-transactions')) {
-            $builderArgs[] = '--no-transactions';
-        }
-        if ($input->getOption('separate-process')) {
-            $builderArgs[] = '--separate-process';
-        }
         // useful in case the subprocess has a migration step of type process/run
         if ($input->getOption('force-sigchild-enabled')) {
             $builderArgs[] = '--force-sigchild-enabled';
@@ -484,7 +478,17 @@ EOT
         if ($input->getOption('ignore-failures')) {
             $builderArgs[] = '--ignore-failures';
         }
-
+        if ($input->getOption('no-transactions')) {
+            $builderArgs[] = '--no-transactions';
+        }
+        if ($input->getOption('separate-process')) {
+            $builderArgs[] = '--separate-process';
+        }
+        if ($input->getOption('set-reference')) {
+            foreach($input->getOption('set-reference') as $refSpec) {
+                $builderArgs[] = '--set-reference=' . $refSpec;
+            }
+        }
         return $builderArgs;
     }
 }

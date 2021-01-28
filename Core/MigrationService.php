@@ -2,7 +2,9 @@
 
 namespace Kaliop\eZMigrationBundle\Core;
 
+use Kaliop\eZMigrationBundle\API\ReferenceBagInterface;
 use Kaliop\eZMigrationBundle\API\Value\MigrationStep;
+use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 use eZ\Publish\API\Repository\Repository;
 use Kaliop\eZMigrationBundle\API\Collection\MigrationDefinitionCollection;
@@ -67,14 +69,21 @@ class MigrationService implements ContextProviderInterface
 
     protected $migrationContext = array();
 
+    /** @var  OutputInterface $output */
+    protected $output;
+
+    /** @var ReferenceBagInterface */
+    protected $referenceResolver;
+
     public function __construct(LoaderInterface $loader, StorageHandlerInterface $storageHandler, Repository $repository,
-        EventDispatcherInterface $eventDispatcher, $contextHandler)
+        EventDispatcherInterface $eventDispatcher, $contextHandler, $referenceResolver)
     {
         $this->loader = $loader;
         $this->storageHandler = $storageHandler;
         $this->repository = $repository;
         $this->dispatcher = $eventDispatcher;
         $this->contextHandler = $contextHandler;
+        $this->referenceResolver = $referenceResolver;
     }
 
     public function addDefinitionParser(DefinitionParserInterface $DefinitionParser)
@@ -117,10 +126,20 @@ class MigrationService implements ContextProviderInterface
     }
 
     /**
+     * @todo we could get rid of this by getting $output passed as argument to self::executeMigration. We are not doing
+     *       that for BC for the moment (self::executeMigration api should be redone, but it is used in WorkfloBundle too)
+     */
+    public function setOutput(OutputInterface $output)
+    {
+        $this->output = $output;
+    }
+
+    /**
      * NB: returns UNPARSED definitions
      *
      * @param string[] $paths
      * @return MigrationDefinitionCollection key: migration name, value: migration definition as binary string
+     * @throws \Exception
      */
     public function getMigrationsDefinitions(array $paths = array())
     {
@@ -165,6 +184,11 @@ class MigrationService implements ContextProviderInterface
     public function getMigrationsByStatus($status, $limit = null, $offset = null)
     {
         return $this->storageHandler->loadMigrationsByStatus($status, $limit, $offset);
+    }
+
+    public function getMigrationsByPaths(array $paths, $limit = null, $offset = null)
+    {
+        return $this->storageHandler->loadMigrationsByPaths($paths, $limit, $offset);
     }
 
     /**
@@ -259,7 +283,7 @@ class MigrationService implements ContextProviderInterface
      *
      * @todo treating a null and false $adminLogin values differently is prone to hard-to-track errors.
      *       Shall we use instead -1 to indicate the desire to not-login-as-admin-user-at-all ?
-     * @todo refactor there start to be too many parameters here. Move to an single parameter: array of options or value-object
+     * @todo refactor. There are too many parameters here to add more. Move to a single parameter: array of options or value-object
      */
     public function executeMigration(MigrationDefinition $migrationDefinition, $useTransaction = true,
         $defaultLanguageCode = null, $adminLogin = null, $force = false, $forceSigchildEnabled = null)
@@ -313,7 +337,7 @@ class MigrationService implements ContextProviderInterface
                     // save enough data in the context to be able to successfully suspend/resume
                     $this->migrationContext[$migration->name]['step'] = $i;
 
-                    $step = $this->injectContextIntoStep($step, $migrationContext);
+                    $step = $this->injectContextIntoStep($step, array_merge($migrationContext, array('step' => $i)));
 
                     // we validated the fact that we have a good executor at parsing time
                     $executor = $this->executors[$step->type];
@@ -377,6 +401,7 @@ class MigrationService implements ContextProviderInterface
             }
 
         } catch (\Exception $e) {
+            /// @todo shall we emit a signal as well?
 
             $errorMessage = $this->getFullExceptionMessage($e) . ' in file ' . $e->getFile() . ' line ' . $e->getLine();
             $finalStatus = Migration::STATUS_FAILED;
@@ -432,11 +457,12 @@ class MigrationService implements ContextProviderInterface
     /**
      * @param Migration $migration
      * @param bool $useTransaction
+     * @param array $forcedReferences
      * @throws \Exception
      *
      * @todo add support for adminLogin ?
      */
-    public function resumeMigration(Migration $migration, $useTransaction = true)
+    public function resumeMigration(Migration $migration, $useTransaction = true, array $forcedReferences = array())
     {
         if ($migration->status != Migration::STATUS_SUSPENDED) {
             throw new \Exception("Can not resume ".$this->getEntityName($migration)." '{$migration->name}': it is not in suspended status");
@@ -457,6 +483,12 @@ class MigrationService implements ContextProviderInterface
 
         // restore context
         $this->contextHandler->restoreCurrentContext($migration->name);
+
+        if ($forcedReferences) {
+            foreach($forcedReferences as $name => $value) {
+                $this->referenceResolver->addReference($name, $value, true);
+            }
+        }
 
         if (!isset($this->migrationContext[$migration->name])) {
             throw new \Exception("Can not resume ".$this->getEntityName($migration)." '{$migration->name}': the stored context is missing");
@@ -498,6 +530,10 @@ class MigrationService implements ContextProviderInterface
         if ($forceSigchildEnabled !== null)
         {
             $properties['forceSigchildEnabled'] = $forceSigchildEnabled;
+        }
+
+        if ($this->output) {
+            $properties['output'] = $this->output;
         }
 
         return $properties;
@@ -573,7 +609,14 @@ class MigrationService implements ContextProviderInterface
      */
     public function getCurrentContext($migrationName)
     {
-        return isset($this->migrationContext[$migrationName]) ? $this->migrationContext[$migrationName] : null;
+        if (!isset($this->migrationContext[$migrationName]))
+            return null;
+        $context = $this->migrationContext[$migrationName];
+        // avoid attempting to store the current outputInterface when saving the context
+        if (isset($context['output'])) {
+            unset($context['output']);
+        }
+        return $context;
     }
 
     /**
@@ -583,6 +626,9 @@ class MigrationService implements ContextProviderInterface
     public function restoreContext($migrationName, array $context)
     {
         $this->migrationContext[$migrationName] = $context;
+        if ($this->output) {
+            $this->migrationContext['output'] = $this->output;
+        }
     }
 
     protected function getEntityName($migration)

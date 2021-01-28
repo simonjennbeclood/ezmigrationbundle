@@ -3,8 +3,9 @@
 namespace Kaliop\eZMigrationBundle\Core\Executor;
 
 use Symfony\Component\DependencyInjection\ContainerInterface;
-use Kaliop\eZMigrationBundle\API\Value\MigrationStep;
+use Kaliop\eZMigrationBundle\API\Exception\InvalidStepDefinitionException;
 use Kaliop\eZMigrationBundle\API\ReferenceResolverBagInterface;
+use Kaliop\eZMigrationBundle\API\Value\MigrationStep;
 
 class ServiceExecutor extends AbstractExecutor
 {
@@ -27,20 +28,20 @@ class ServiceExecutor extends AbstractExecutor
     /**
      * @param MigrationStep $step
      * @return mixed
-     * @throws \Exception
+     * @throws InvalidStepDefinitionException
      */
     public function execute(MigrationStep $step)
     {
         parent::execute($step);
 
         if (!isset($step->dsl['mode'])) {
-            throw new \Exception("Invalid step definition: missing 'mode'");
+            throw new InvalidStepDefinitionException("Invalid step definition: missing 'mode'");
         }
 
         $action = $step->dsl['mode'];
 
         if (!in_array($action, $this->supportedActions)) {
-            throw new \Exception("Invalid step definition: value '$action' is not allowed for 'mode'");
+            throw new InvalidStepDefinitionException("Invalid step definition: value '$action' is not allowed for 'mode'");
         }
 
         $this->skipStepIfNeeded($step);
@@ -52,25 +53,25 @@ class ServiceExecutor extends AbstractExecutor
      * @param $dsl
      * @param $context
      * @return mixed
-     * @throws \Exception
+     * @throws InvalidStepDefinitionException
      */
     protected function call($dsl, $context)
     {
         if (!isset($dsl['service'])) {
-            throw new \Exception("Can not call service method: 'service' missing");
+            throw new InvalidStepDefinitionException("Can not call service method: 'service' missing");
         }
         if (!isset($dsl['method'])) {
-            throw new \Exception("Can not call service method: 'method' missing");
+            throw new InvalidStepDefinitionException("Can not call service method: 'method' missing");
         }
         if (isset($dsl['arguments']) && !is_array($dsl['arguments'])) {
-            throw new \Exception("Can not call service method: 'arguments' is not an array");
+            throw new InvalidStepDefinitionException("Can not call service method: 'arguments' is not an array");
         }
 
         $service = $this->container->get($this->referenceResolver->resolveReference($dsl['service']));
         $method = $this->referenceResolver->resolveReference($dsl['method']);
         $callable = array($service, $method);
         if (!is_callable($callable)) {
-            throw new \Exception("Can not call service method: $method is not a method of " . get_class($service));
+            throw new InvalidStepDefinitionException("Can not call service method: $method is not a method of " . get_class($service));
         }
 
         if (isset($dsl['arguments'])) {
@@ -115,13 +116,21 @@ class ServiceExecutor extends AbstractExecutor
         return $result;
     }
 
+    /**
+     * @param $result
+     * @param \Exception|null $exception
+     * @param $dsl
+     * @return bool
+     * @throws InvalidStepDefinitionException
+     */
     protected function setReferences($result, \Exception $exception = null, $dsl)
     {
         if (!array_key_exists('references', $dsl)) {
             return false;
         }
 
-        foreach ($dsl['references'] as $reference) {
+        foreach ($dsl['references'] as $key => $reference) {
+            $reference = $this->parseReferenceDefinition($key, $reference);
             switch ($reference['attribute']) {
                 case 'result':
                     $value = $result;
@@ -140,7 +149,7 @@ class ServiceExecutor extends AbstractExecutor
                     break;
 
                 default:
-                    throw new \InvalidArgumentException('Service executor does not support setting references for attribute ' . $reference['attribute']);
+                    throw new InvalidStepDefinitionException('Service executor does not support setting references for attribute ' . $reference['attribute']);
             }
 
             $overwrite = false;

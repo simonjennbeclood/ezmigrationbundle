@@ -2,6 +2,7 @@
 
 namespace Kaliop\eZMigrationBundle\Core\Matcher;
 
+use eZ\Publish\API\Repository\Exceptions\InvalidArgumentException;
 use eZ\Publish\API\Repository\Values\Content\Query;
 use eZ\Publish\API\Repository\Values\Content\LocationQuery;
 use eZ\Publish\API\Repository\Values\Content\Location;
@@ -24,10 +25,12 @@ class LocationMatcher extends QueryBasedMatcher implements SortingMatcherInterfa
         self::MATCH_CONTENT_ID, self::MATCH_LOCATION_ID, self::MATCH_CONTENT_REMOTE_ID, self::MATCH_LOCATION_REMOTE_ID,
         self::MATCH_ATTRIBUTE, self::MATCH_CONTENT_TYPE_ID, self::MATCH_CONTENT_TYPE_IDENTIFIER, self::MATCH_GROUP,
         self::MATCH_CREATION_DATE, self::MATCH_MODIFICATION_DATE, self::MATCH_OBJECT_STATE, self::MATCH_OWNER,
-        self::MATCH_PARENT_LOCATION_ID, self::MATCH_PARENT_LOCATION_REMOTE_ID, self::MATCH_SECTION, self::MATCH_SUBTREE,
-        self::MATCH_VISIBILITY,
+        self::MATCH_PARENT_LOCATION_ID, self::MATCH_PARENT_LOCATION_REMOTE_ID, self::MATCH_QUERY_TYPE, self::MATCH_SECTION,
+        self::MATCH_SUBTREE, self::MATCH_VISIBILITY,
         // aliases
-        'content_type', 'content_type_id', 'content_type_identifier',
+        'content_type',
+        // BC
+        'contenttype_id', 'contenttype_identifier',
         // location-only
         self::MATCH_DEPTH, self::MATCH_IS_MAIN_LOCATION, self::MATCH_PRIORITY,
     );
@@ -38,13 +41,15 @@ class LocationMatcher extends QueryBasedMatcher implements SortingMatcherInterfa
      * @param array $sort
      * @param int $offset
      * @param int $limit
+     * @param bool $tolerateMisses
      * @return LocationCollection
+     * @throws InvalidArgumentException
      * @throws InvalidMatchConditionsException
      * @throws InvalidSortConditionsException
      */
-    public function match(array $conditions, array $sort = array(), $offset = 0, $limit = 0)
+    public function match(array $conditions, array $sort = array(), $offset = 0, $limit = 0, $tolerateMisses = false)
     {
-        return $this->matchLocation($conditions, $sort, $offset, $limit);
+        return $this->matchLocation($conditions, $sort, $offset, $limit, $tolerateMisses);
     }
 
     /**
@@ -52,6 +57,7 @@ class LocationMatcher extends QueryBasedMatcher implements SortingMatcherInterfa
      * @param array $sort
      * @param int $offset
      * @return Location
+     * @throws InvalidArgumentException
      * @throws InvalidMatchConditionsException
      * @throws InvalidSortConditionsException
      * @throws InvalidMatchResultsNumberException
@@ -63,6 +69,11 @@ class LocationMatcher extends QueryBasedMatcher implements SortingMatcherInterfa
         if ($count !== 1) {
             throw new InvalidMatchResultsNumberException("Found $count " . $this->returns . " when expected exactly only one to match the conditions");
         }
+
+        if ($results instanceof \ArrayObject) {
+            $results = $results->getArrayCopy();
+        }
+
         return reset($results);
     }
 
@@ -71,25 +82,34 @@ class LocationMatcher extends QueryBasedMatcher implements SortingMatcherInterfa
      * @param array $sort
      * @param int $offset
      * @param int $limit
+     * @param bool $tolerateMisses
      * @return LocationCollection
+     * @throws InvalidArgumentException
      * @throws InvalidMatchConditionsException
      * @throws InvalidSortConditionsException
      */
-    public function matchLocation(array $conditions, array $sort = array(), $offset = 0, $limit = 0)
+    public function matchLocation(array $conditions, array $sort = array(), $offset = 0, $limit = 0, $tolerateMisses = false)
     {
         $this->validateConditions($conditions);
 
         foreach ($conditions as $key => $values) {
 
-            $query = new LocationQuery();
+            if ($key == self::MATCH_QUERY_TYPE) {
+                $query = $this->getQueryByQueryType($values);
+            } else {
+                $query = new LocationQuery();
+                $query->filter = $this->getQueryCriterion($key, $values);
+            }
+
+            // q: when getting a query via QueryType, should we always inject offset/limit?
             $query->limit = $limit != 0 ? $limit : self::INT_MAX_16BIT;
             $query->offset = $offset;
             if (!empty($sort)) {
                 $query->sortClauses = $this->getSortClauses($sort);
             }
             if (isset($query->performCount)) $query->performCount = false;
-            $query->filter = $this->getQueryCriterion($key, $values);
-            $results = $this->repository->getSearchService()->findLocations($query);
+
+            $results = $this->getSearchService()->findLocations($query);
 
             $locations = [];
             foreach ($results->searchHits as $result) {
@@ -163,7 +183,7 @@ class LocationMatcher extends QueryBasedMatcher implements SortingMatcherInterfa
 
         foreach ($contentIds as $contentId) {
             $content = $this->repository->getContentService()->loadContent($contentId);
-            foreach($this->repository->getLocationService()->loadLocations($content->contentInfo) as $location) {
+            foreach ($this->repository->getLocationService()->loadLocations($content->contentInfo) as $location) {
                 $locations[$location->id] = $location;
             }
         }
@@ -184,7 +204,7 @@ class LocationMatcher extends QueryBasedMatcher implements SortingMatcherInterfa
 
         foreach ($remoteContentIds as $remoteContentId) {
             $content = $this->repository->getContentService()->loadContentByRemoteId($remoteContentId);
-            foreach($this->repository->getLocationService()->loadLocations($content->contentInfo) as $location) {
+            foreach ($this->repository->getLocationService()->loadLocations($content->contentInfo) as $location) {
                 $locations[$location->id] = $location;
             }
         }
@@ -237,7 +257,7 @@ class LocationMatcher extends QueryBasedMatcher implements SortingMatcherInterfa
         if (isset($query->performCount)) $query->performCount = false;
         $query->filter = new Query\Criterion\ParentLocationId($parentLocationIds);
 
-        $results = $this->repository->getSearchService()->findLocations($query);
+        $results = $this->getSearchService()->findLocations($query);
 
         $locations = [];
 

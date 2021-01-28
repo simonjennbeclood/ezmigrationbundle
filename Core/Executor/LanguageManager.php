@@ -4,6 +4,7 @@ namespace Kaliop\eZMigrationBundle\Core\Executor;
 
 use eZ\Publish\API\Repository\Values\Content\Language;
 use Kaliop\eZMigrationBundle\API\Collection\LanguageCollection;
+use Kaliop\eZMigrationBundle\API\Exception\InvalidStepDefinitionException;
 use Kaliop\eZMigrationBundle\API\MigrationGeneratorInterface;
 use Kaliop\eZMigrationBundle\API\EnumerableMatcherInterface;
 use Kaliop\eZMigrationBundle\Core\Matcher\LanguageMatcher;
@@ -37,7 +38,7 @@ class LanguageManager extends RepositoryExecutor implements MigrationGeneratorIn
         $languageService = $this->repository->getContentLanguageService();
 
         if (!isset($step->dsl['lang'])) {
-            throw new \Exception("The 'lang' key is required to create a new language.");
+            throw new InvalidStepDefinitionException("The 'lang' key is required to create a new language.");
         }
 
         $languageCreateStruct = $languageService->newLanguageCreateStruct();
@@ -59,6 +60,8 @@ class LanguageManager extends RepositoryExecutor implements MigrationGeneratorIn
     {
         $languageCollection = $this->matchLanguages('load', $step);
 
+        $this->validateResultsCount($languageCollection, $step);
+
         $this->setReferences($languageCollection, $step);
 
         return $languageCollection;
@@ -76,9 +79,7 @@ class LanguageManager extends RepositoryExecutor implements MigrationGeneratorIn
 
         $languageCollection = $this->matchLanguages('delete', $step);
 
-        if (count($languageCollection) > 1 && array_key_exists('references', $step->dsl)) {
-            throw new \Exception("Can not execute Language update because multiple languages match, and a references section is specified in the dsl. References can be set when only 1 language matches");
-        }
+        $this->validateResultsCount($languageCollection, $step);
 
         $languageService = $this->repository->getContentLanguageService();
 
@@ -113,7 +114,10 @@ class LanguageManager extends RepositoryExecutor implements MigrationGeneratorIn
             // BC
             $step->dsl['match'] = array('language_code' => $step->dsl['lang']);
         }
+
         $languageCollection = $this->matchLanguages('delete', $step);
+
+        $this->validateResultsCount($languageCollection, $step);
 
         $this->setReferences($languageCollection, $step);
 
@@ -134,26 +138,30 @@ class LanguageManager extends RepositoryExecutor implements MigrationGeneratorIn
     protected function matchLanguages($action, $step)
     {
         if (!isset($step->dsl['match'])) {
-            throw new \Exception("A match condition is required to $action a language");
+            throw new InvalidStepDefinitionException("A match condition is required to $action a language");
         }
 
         // convert the references passed in the match
         $match = $this->resolveReferencesRecursively($step->dsl['match']);
 
-        return $this->languageMatcher->match($match);
+        $tolerateMisses = isset($step->dsl['match_tolerate_misses']) ? $this->referenceResolver->resolveReference($step->dsl['match_tolerate_misses']) : false;
+
+        return $this->languageMatcher->match($match, $tolerateMisses);
     }
 
     /**
      * @param Language $language
      * @param array $references the definitions of the references to set
-     * @throws \InvalidArgumentException When trying to assign a reference to an unsupported attribute
+     * @throws InvalidStepDefinitionException
      * @return array key: the reference names, values: the reference values
      */
     protected function getReferencesValues($language, array $references, $step)
     {
         $refs = array();
 
-        foreach ($references as $reference) {
+        foreach ($references as $key => $reference) {
+
+            $reference = $this->parseReferenceDefinition($key, $reference);
 
             switch ($reference['attribute']) {
                 case 'language_id':
@@ -171,7 +179,7 @@ class LanguageManager extends RepositoryExecutor implements MigrationGeneratorIn
                     $value = $language->name;
                     break;
                 default:
-                    throw new \InvalidArgumentException('Language Manager does not support setting references for attribute ' . $reference['attribute']);
+                    throw new InvalidStepDefinitionException('Language Manager does not support setting references for attribute ' . $reference['attribute']);
             }
 
             $refs[$reference['identifier']] = $value;

@@ -2,6 +2,7 @@
 
 namespace Kaliop\eZMigrationBundle\Core\Executor;
 
+use Kaliop\eZMigrationBundle\API\Exception\InvalidStepDefinitionException;
 use Kaliop\eZMigrationBundle\API\Value\MigrationStep;
 use Kaliop\eZMigrationBundle\API\EmbeddedReferenceResolverBagInterface;
 
@@ -33,13 +34,13 @@ class FileExecutor extends AbstractExecutor
         parent::execute($step);
 
         if (!isset($step->dsl['mode'])) {
-            throw new \Exception("Invalid step definition: missing 'mode'");
+            throw new InvalidStepDefinitionException("Invalid step definition: missing 'mode'");
         }
 
         $action = $step->dsl['mode'];
 
         if (!in_array($action, $this->supportedActions)) {
-            throw new \Exception("Invalid step definition: value '$action' is not allowed for 'mode'");
+            throw new InvalidStepDefinitionException("Invalid step definition: value '$action' is not allowed for 'mode'");
         }
 
         $this->skipStepIfNeeded($step);
@@ -56,7 +57,7 @@ class FileExecutor extends AbstractExecutor
     protected function load($dsl, $context)
     {
         if (!isset($dsl['file'])) {
-            throw new \Exception("Can not load file: name missing");
+            throw new InvalidStepDefinitionException("Can not load file: name missing");
         }
         $fileName = $this->referenceResolver->resolveReference($dsl['file']);
         if (!file_exists($fileName)) {
@@ -77,14 +78,15 @@ class FileExecutor extends AbstractExecutor
     protected function exists($dsl, $context)
     {
         if (!isset($dsl['file'])) {
-            throw new \Exception("Can not check for existence of file: name missing");
+            throw new InvalidStepDefinitionException("Can not check for existence of file: name missing");
         }
         $fileName = $this->referenceResolver->resolveReference($dsl['file']);
 
         $exists = file_exists($fileName);
 
         if (array_key_exists('references', $dsl)) {
-            foreach ($dsl['references'] as $reference) {
+            foreach ($dsl['references'] as $key => $reference) {
+                $reference = $this->parseReferenceDefinition($key, $reference);
                 switch ($reference['attribute']) {
                     case 'exists':
                         $overwrite = false;
@@ -109,7 +111,7 @@ class FileExecutor extends AbstractExecutor
     protected function save($dsl, $context)
     {
         if (!isset($dsl['file']) || (!isset($dsl['body']) && !isset($dsl['template']))) {
-            throw new \Exception("Can not save file: name or body or template missing");
+            throw new InvalidStepDefinitionException("Can not save file: name or body or template missing");
         }
 
         if (isset($dsl['body']) && is_string($dsl['body'])) {
@@ -123,7 +125,7 @@ class FileExecutor extends AbstractExecutor
             }
             $contents = $this->resolveReferencesInText(file_get_contents($template));
         } else {
-            throw new \Exception("Can not save file: either body or template tag must be a string");
+            throw new InvalidStepDefinitionException("Can not save file: either body or template tag must be a string");
         }
 
         $fileName = $this->referenceResolver->resolveReference($dsl['file']);
@@ -149,7 +151,7 @@ class FileExecutor extends AbstractExecutor
     protected function append($dsl, $context)
     {
         if (!isset($dsl['file']) || (!isset($dsl['body']) && !isset($dsl['template']))) {
-            throw new \Exception("Can not append to file: name or body or template missing");
+            throw new InvalidStepDefinitionException("Can not append to file: name or body or template missing");
         }
 
         if (isset($dsl['body']) && is_string($dsl['body'])) {
@@ -163,7 +165,7 @@ class FileExecutor extends AbstractExecutor
             }
             $contents = $this->resolveReferencesInText(file_get_contents($template));
         } else {
-            throw new \Exception("Can not append to file: either body or template tag must be a string");
+            throw new InvalidStepDefinitionException("Can not append to file: either body or template tag must be a string");
         }
 
         $fileName = $this->referenceResolver->resolveReference($dsl['file']);
@@ -184,7 +186,7 @@ class FileExecutor extends AbstractExecutor
     protected function prepend($dsl, $context)
     {
         if (!isset($dsl['file']) || (!isset($dsl['body']) && !isset($dsl['template']))) {
-            throw new \Exception("Can not prepend to file: name or body or template missing");
+            throw new InvalidStepDefinitionException("Can not prepend to file: name or body or template missing");
         }
 
         if (isset($dsl['body']) && is_string($dsl['body'])) {
@@ -198,7 +200,7 @@ class FileExecutor extends AbstractExecutor
             }
             $contents = $this->resolveReferencesInText(file_get_contents($template));
         } else {
-            throw new \Exception("Can not append to file: either body or template tag must be a string");
+            throw new InvalidStepDefinitionException("Can not append to file: either body or template tag must be a string");
         }
 
         $fileName = $this->referenceResolver->resolveReference($dsl['file']);
@@ -223,7 +225,7 @@ class FileExecutor extends AbstractExecutor
     protected function copy($dsl, $context)
     {
         if (!isset($dsl['from']) || !isset($dsl['to'])) {
-            throw new \Exception("Can not copy file: from or to missing");
+            throw new InvalidStepDefinitionException("Can not copy file: from or to missing");
         }
 
         $fileName = $this->referenceResolver->resolveReference($dsl['from']);
@@ -255,7 +257,7 @@ class FileExecutor extends AbstractExecutor
     protected function move($dsl, $context)
     {
         if (!isset($dsl['from']) || !isset($dsl['to'])) {
-            throw new \Exception("Can not move file: from or to missing");
+            throw new InvalidStepDefinitionException("Can not move file: from or to missing");
         }
 
         $fileName = $this->referenceResolver->resolveReference($dsl['from']);
@@ -287,7 +289,7 @@ class FileExecutor extends AbstractExecutor
     protected function delete($dsl, $context)
     {
         if (!isset($dsl['file'])) {
-            throw new \Exception("Can not delete file: name missing");
+            throw new InvalidStepDefinitionException("Can not delete file: name missing");
         }
 
         $fileName = $this->referenceResolver->resolveReference($dsl['file']);
@@ -304,6 +306,12 @@ class FileExecutor extends AbstractExecutor
         return true;
     }
 
+    /**
+     * @param $fileName
+     * @param $dsl
+     * @return bool
+     * @throws InvalidStepDefinitionException
+     */
     protected function setReferences($fileName, $dsl)
     {
         if (!array_key_exists('references', $dsl)) {
@@ -317,7 +325,8 @@ class FileExecutor extends AbstractExecutor
             throw new \Exception("Can not set references for file '$fileName': stat failed");
         }
 
-        foreach ($dsl['references'] as $reference) {
+        foreach ($dsl['references'] as $key => $reference) {
+            $reference = $this->parseReferenceDefinition($key, $reference);
             switch ($reference['attribute']) {
                 case 'body':
                     $value = file_get_contents($fileName);
@@ -341,7 +350,7 @@ class FileExecutor extends AbstractExecutor
                     $value = $stats[10];
                     break;
                 default:
-                    throw new \InvalidArgumentException('File executor does not support setting references for attribute ' . $reference['attribute']);
+                    throw new InvalidStepDefinitionException('File executor does not support setting references for attribute ' . $reference['attribute']);
             }
 
             $overwrite = false;

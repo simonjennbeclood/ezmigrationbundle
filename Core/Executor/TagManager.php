@@ -3,6 +3,7 @@
 namespace Kaliop\eZMigrationBundle\Core\Executor;
 
 use Kaliop\eZMigrationBundle\API\Exception\InvalidMatchConditionsException;
+use Kaliop\eZMigrationBundle\API\Exception\InvalidStepDefinitionException;
 use Netgen\TagsBundle\API\Repository\Values\Tags\Tag;
 use Kaliop\eZMigrationBundle\Core\Matcher\TagMatcher;
 use Kaliop\eZMigrationBundle\API\EnumerableMatcherInterface;
@@ -94,6 +95,8 @@ class TagManager extends RepositoryExecutor implements MigrationGeneratorInterfa
 
         $tagsCollection = $this->matchTags('load', $step);
 
+        $this->validateResultsCount($tagsCollection, $step);
+
         $this->setReferences($tagsCollection, $step);
 
         return $tagsCollection;
@@ -105,9 +108,7 @@ class TagManager extends RepositoryExecutor implements MigrationGeneratorInterfa
 
         $tagsCollection = $this->matchTags('update', $step);
 
-        if (count($tagsCollection) > 1 && array_key_exists('references', $step->dsl)) {
-            throw new \Exception("Can not execute Tag update because multiple tags match, and a references section is specified in the dsl. References can be set when only 1 matches");
-        }
+        $this->validateResultsCount($tagsCollection, $step);
 
         foreach ($tagsCollection as $key => $tag) {
 
@@ -157,6 +158,8 @@ class TagManager extends RepositoryExecutor implements MigrationGeneratorInterfa
 
         $tagsCollection = $this->matchTags('delete', $step);
 
+        $this->validateResultsCount($tagsCollection, $step);
+
         $this->setReferences($tagsCollection, $step);
 
         // sort tags by depth so that there will be no errors in case we are deleting parent and child
@@ -181,19 +184,21 @@ class TagManager extends RepositoryExecutor implements MigrationGeneratorInterfa
     protected function matchTags($action, $step)
     {
         if (!isset($step->dsl['match'])) {
-            throw new \Exception("A match condition is required to $action a Tag");
+            throw new InvalidStepDefinitionException("A match condition is required to $action a Tag");
         }
 
         // convert the references passed in the match
         $match = $this->resolveReferencesRecursively($step->dsl['match']);
 
-        return $this->tagMatcher->match($match);
+        $tolerateMisses = isset($step->dsl['match_tolerate_misses']) ? $this->referenceResolver->resolveReference($step->dsl['match_tolerate_misses']) : false;
+
+        return $this->tagMatcher->match($match, $tolerateMisses);
     }
 
     /**
      * @param Tag $tag
      * @param array $references the definitions of the references to set
-     * @throws \InvalidArgumentException When trying to assign a reference to an unsupported attribute
+     * @throws InvalidStepDefinitionException
      * @return array key: the reference names, values: the reference values
      */
     protected function getReferencesValues($tag, array $references, $step)
@@ -201,7 +206,8 @@ class TagManager extends RepositoryExecutor implements MigrationGeneratorInterfa
         $lang = $this->getLanguageCode($step);
         $refs = array();
 
-        foreach ($references as $reference) {
+        foreach ($references as $key => $reference) {
+            $reference = $this->parseReferenceDefinition($key, $reference);
             switch ($reference['attribute']) {
                 case 'id':
                 case 'tag_id':
@@ -236,7 +242,7 @@ class TagManager extends RepositoryExecutor implements MigrationGeneratorInterfa
                     break;
 
                 default:
-                    throw new \InvalidArgumentException('Tag Manager does not support setting references for attribute ' . $reference['attribute']);
+                    throw new InvalidStepDefinitionException('Tag Manager does not support setting references for attribute ' . $reference['attribute']);
             }
 
             $refs[$reference['identifier']] = $value;

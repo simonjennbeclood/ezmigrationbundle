@@ -15,16 +15,19 @@
     user_content_type: xxx # Optional, Content Type identifier (defaults to 'user')
     lang: xxx-YY # Optional, will fallback to default language if not provided (--default-language option or 'eng-GB' by default)
     groups: [x, y, z] # The user group ID or IDs (Content IDs or its/their remote_ids as string) to put the user into
+    roles: [x, y, z] # The role names or ids to assign to the user
     # The list in references tells the manager to store specific values for later use
     # by other steps in the current migration.
     references: # Optional
-         -
+        # short syntax:
+        referenceId: attributeId # (possible values and meaning are explained for the 'long syntax')
+        # long syntax:
+        -
             identifier: referenceId # A string used to identify the reference
             attribute: attribute # An attribute to get the value of for the reference.
                                  # Supports user_id, email, enabled, login, groups_ids (the latter returns an array)
                                  # The shorthand 'id' can be used instead of 'user_id'
-    references_type: "array" # Optional. If not set, created references values will be scalars. If set, they will be arrays
-    references_allow_empty: bool # optional. Set it to allow array references to be empty without it being considered an error
+            overwrite: true|false # Optional, default false. If not set, and the reference already exists, an exception is thrown
     if: # Optional. If set, the migration step will be skipped unless the condition is matched
         "reference:_ref_name": # name of a reference to be used for the test
             _operator_: value # allowed operators: eq, gt, gte, lt, lte, ne, count, length, regexp, satisfies
@@ -59,7 +62,7 @@
         #        mode: load
         #        match:
         #            contenttype_identifier: editor_user
-        #        references_type: array
+        #        expect: many
         #        references:
         #        -
         #            identifier: editor_user_ids
@@ -78,6 +81,7 @@
         #                first_name: "faker: firstName"
         #                last_name: "faker: lastName"
 
+    match_tolerate_misses: false # optional. Do not fail the execution if there is no item matching, when matching by id, email or login
     email: xyz # Optional. NB: can only be set if the match definition latches a single user
     password: xyz # Optional. NB: The given password string is the plaintext version; it will be automatically hashed in the cms. PLEASE DON'T LET CLEARTEXT PASSWORDS BE STORED IN YOUR SOURCE CODE VERSIONING SYSTEMS
     enabled: true|false # Optional
@@ -87,14 +91,20 @@
     # The list in references tells the manager to store specific values for later use by other steps in the current migration.
     # NB: these are NEW VARIABLES THAT YOU ARE CREATING. They are not used in the current migration step!
     references: # Optional
-         -
+        # short syntax:
+        referenceId: attributeId # (possible values and meaning are explained for the 'long syntax')
+        # long syntax:
+        -
             identifier: referenceId # A string used to identify the reference
             attribute: attribute # An attribute to get the value of for the reference.
                                  # Supports user_id, email, enabled, login, groups_ids (the latter returns an array)
                                  # The shorthand 'id' can be used instead of 'user_id'
                                  # 'count' can be used to set a reference to the number of items matched
-    references_type: "array" # Optional. If not set, created references values will be scalars. If set, they will be arrays
-    references_allow_empty: bool # optional. Set it to allow array references to be empty without it being considered an error
+            overwrite: true|false # Optional, default false. If not set, and the reference already exists, an exception is thrown
+    expect: one|any|many # Optional. If set, the number of matched items will be validated, and the type of values set to created references will change
+                         # 'one': only one element should be matched; reference values will be scalars
+                         # 'any': zero or more element should be matched; reference values will be arrays
+                         # 'many': one or more element should be matched; reference values will be arrays
     if: # Optional. If set, the migration step will be skipped unless the condition is matched
         "reference:_ref_name": # name of a reference to be used for the test
             _operator_: value # allowed operators: eq, gt, gte, lt, lte, ne, count, length, regexp, satisfies
@@ -117,16 +127,19 @@
                 _condition_: value # where _condition_ can be any of ones specified above, including 'and' and 'or'
             -
                 _condition_: value # where _condition_ can be any of ones specified above, including 'and' and 'or'
-
         # NB: if you need more complex matching conditions to select a set of users, see user/update above
-
+    match_tolerate_misses: false # optional. Do not fail the execution if there is no item matching, when matching by id, email or login
     references: # Optional
-         -
+        # short syntax:
+        referenceId: attributeId # (possible values and meaning are explained for the 'long syntax')
+        # long syntax:
+        -
             identifier: referenceId # A string used to identify the reference
             attribute: attribute # An attribute to get the value of for the reference.
                                  # Supports user_id, email, enabled, login, groups_ids (the latter returns an array)
                                  # The shorthand 'id' can be used instead of 'user_id'
                                  # 'count' can be used to set a reference to the number of items matched
+            overwrite: true|false # Optional, default false. If not set, and the reference already exists, an exception is thrown
     if: # Optional. If set, the migration step will be skipped unless the condition is matched
         "reference:_ref_name": # name of a reference to be used for the test
             _operator_: value # allowed operators: eq, gt, gte, lt, lte, ne, count, length, regexp, satisfies
@@ -149,13 +162,18 @@
                 _condition_: value # where _condition_ can be any of ones specified above, including 'and' and 'or'
             -
                 _condition_: value # where _condition_ can be any of ones specified above, including 'and' and 'or'
+    match_tolerate_misses: false # optional. Do not fail the execution if there is no item matching, when matching by id, email or login
     references: # Optional
-         -
+        # short syntax:
+        referenceId: attributeId # (possible values and meaning are explained for the 'long syntax')
+        # long syntax:
+        -
             identifier: referenceId # A string used to identify the reference
             attribute: attribute # An attribute to get the value of for the reference.
                                  # Supports user_id, email, enabled, login, groups_ids (the latter returns an array)
                                  # The shorthand 'id' can be used instead of 'user_id'
                                  # 'count' can be used to set a reference to the number of items matched
+            overwrite: true|false # Optional, default false. If not set, and the reference already exists, an exception is thrown
     if: # Optional. If set, the migration step will be skipped unless the condition is matched
         "reference:_ref_name": # name of a reference to be used for the test
             _operator_: value # allowed operators: eq, gt, gte, lt, lte, ne, count, length, regexp, satisfies
@@ -172,13 +190,15 @@
     # The list in references tells the manager to store specific values for later use by other steps in the current migration.
     # NB: these are NEW VARIABLES THAT YOU ARE CREATING. They are not used in the current migration step!
     references: # Optional
-         -
+        # short syntax:
+        referenceId: attributeId # (possible values and meaning are explained for the 'long syntax')
+        # long syntax:
+        -
             identifier: referenceId # A string used to identify the reference
             attribute: attribute # An attribute to get the value of for the reference.
                                  # Supports: user_group_id, parent_user_group_id, users_ids (the latter returns an array)
                                  # The shorthand 'id' can be used instead of 'user_group_id'
-    references_type: "array" # Optional. If not set, created references values will be scalars. If set, they will be arrays
-    references_allow_empty: bool # optional. Set it to allow array references to be empty without it being considered an error
+            overwrite: true|false # Optional, default false. If not set, and the reference already exists, an exception is thrown
     if: # Optional. If set, the migration step will be skipped unless the condition is matched
         "reference:_ref_name": # name of a reference to be used for the test
             _operator_: value # allowed operators: eq, gt, gte, lt, lte, ne, count, length, regexp, satisfies
@@ -203,6 +223,7 @@
 
         # NB: if you need more complex matching conditions to select a set of usergroups, see user/update above
 
+    match_tolerate_misses: false # optional. Do not fail the execution if there is no item matching, when matching by id, remote_id or parent id
     name: xyz # Optional. Can only be used when the group to be updated is single
     description: xyz # Optional
     parent_group_id: x # Optional, the new parent user group ID or group's remote_id
@@ -212,14 +233,20 @@
     # The list in references tells the manager to store specific values for later use by other steps in the current migration.
     # NB: these are NEW VARIABLES THAT YOU ARE CREATING. They are not used in the current migration step!
     references: # Optional
-         -
+        # short syntax:
+        referenceId: attributeId # (possible values and meaning are explained for the 'long syntax')
+        # long syntax:
+        -
             identifier: referenceId # A string used to identify the reference
             attribute: attribute # An attribute to get the value of for the reference
                                  # Supports: user_group_id, parent_user_group_id, users_ids (the latter returns an array)
                                  # The shorthand 'id' can be used instead of 'user_group_id'
                                  # 'count' can be used to set a reference to the number of items matched
-    references_type: "array" # Optional. If not set, created references values will be scalars. If set, they will be arrays
-    references_allow_empty: bool # optional. Set it to allow array references to be empty without it being considered an error
+            overwrite: true|false # Optional, default false. If not set, and the reference already exists, an exception is thrown
+    expect: one|any|many # Optional. If set, the number of matched items will be validated, and the type of values set to created references will change
+                         # 'one': only one element should be matched; reference values will be scalars
+                         # 'any': zero or more element should be matched; reference values will be arrays
+                         # 'many': one or more element should be matched; reference values will be arrays
     if: # Optional. If set, the migration step will be skipped unless the condition is matched
         "reference:_ref_name": # name of a reference to be used for the test
             _operator_: value # allowed operators: eq, gt, gte, lt, lte, ne, count, length, regexp, satisfies
@@ -245,17 +272,24 @@
 
         # NB: if you need more complex matching conditions to select a set of usergroups, see user/update above
 
+    match_tolerate_misses: false # optional. Do not fail the execution if there is no item matching, when matching by id, remote_id or parent id
     # The list in references tells the manager to store specific values for later use by other steps in the current migration.
     # NB: these are NEW VARIABLES THAT YOU ARE CREATING. They are not used in the current migration step!
     references: # Optional
-         -
+        # short syntax:
+        referenceId: attributeId # (possible values and meaning are explained for the 'long syntax')
+        # long syntax:
+        -
             identifier: referenceId # A string used to identify the reference
             attribute: attribute # An attribute to get the value of for the reference
                                  # Supports: user_group_id, parent_user_group_id, users_ids (the latter returns an array)
                                  # The shorthand 'id' can be used instead of 'user_group_id'
                                  # 'count' can be used to set a reference to the number of items matched
-    references_type: "array" # Optional. If not set, created references values will be scalars. If set, they will be arrays
-    references_allow_empty: bool # optional. Set it to allow array references to be empty without it being considered an error
+            overwrite: true|false # Optional, default false. If not set, and the reference already exists, an exception is thrown
+    expect: one|any|many # Optional. If set, the number of matched items will be validated, and the type of values set to created references will change
+                         # 'one': only one element should be matched; reference values will be scalars
+                         # 'any': zero or more element should be matched; reference values will be arrays
+                         # 'many': one or more element should be matched; reference values will be arrays
     if: # Optional. If set, the migration step will be skipped unless the condition is matched
         "reference:_ref_name": # name of a reference to be used for the test
             _operator_: value # allowed operators: eq, gt, gte, lt, lte, ne, count, length, regexp, satisfies
@@ -277,17 +311,24 @@
                 _condition_: value # where _condition_ can be any of ones specified above, including 'and' and 'or'
             -
                 _condition_: value # where _condition_ can be any of ones specified above, including 'and' and 'or'
+    match_tolerate_misses: false # optional. Do not fail the execution if there is no item matching, when matching by id, remote_id or parent id
     # The list in references tells the manager to store specific values for later use by other steps in the current migration.
     # NB: these are NEW VARIABLES THAT YOU ARE CREATING. They are not used in the current migration step!
     references: # Optional
-         -
+        # short syntax:
+        referenceId: attributeId # (possible values and meaning are explained for the 'long syntax')
+        # long syntax:
+        -
             identifier: referenceId # A string used to identify the reference
             attribute: attribute # An attribute to get the value of for the reference
                                  # Supports: user_group_id, users_ids (the latter returns an array)
                                  # The shorthand 'id' can be used instead of 'user_group_id'
                                  # 'count' can be used to set a reference to the number of items matched
-    references_type: "array" # Optional. If not set, created references values will be scalars. If set, they will be arrays
-    references_allow_empty: bool # optional. Set it to allow array references to be empty without it being considered an error
+            overwrite: true|false # Optional, default false. If not set, and the reference already exists, an exception is thrown
+    expect: one|any|many # Optional. If set, the number of matched items will be validated, and the type of values set to created references will change
+                         # 'one': only one element should be matched; reference values will be scalars
+                         # 'any': zero or more element should be matched; reference values will be arrays
+                         # 'many': one or more element should be matched; reference values will be arrays
     if: # Optional. If set, the migration step will be skipped unless the condition is matched
         "reference:_ref_name": # name of a reference to be used for the test
             _operator_: value # allowed operators: eq, gt, gte, lt, lte, ne, count, length, regexp, satisfies

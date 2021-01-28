@@ -7,13 +7,8 @@
     "authors": [
         {
             "name": "Gaetano Giunta",
-            "email": "ggiunta@kaliop.com",
+            "email": "ggiunta@tanoconsulting.com",
             "role": "Lead Developer"
-        },
-        {
-            "name": "Daniel Clements",
-            "email": "dclements@kaliop.com",
-            "role": "Developer"
         },
         {
             "name": "Peter Halasz",
@@ -26,8 +21,8 @@
     "require": {
         "php": "^7.3",
         "ext-pdo": "*",
-        "ezsystems/ezpublish-kernel": "^8.0@dev",
-        "ezsystems/doctrine-dbal-schema": "^1.0@dev",
+        "ezsystems/ezplatform-kernel": "^1.0",
+        "ezsystems/doctrine-dbal-schema": "^1.0",
         "mtdowling/jmespath.php": "2.*",
         "nikic/php-parser": "^4.2.2",
         "symfony/process": "*",
@@ -51,6 +46,12 @@
             "type": "vcs",
             "url": "https://github.com/kaliop-uk/SecurityAdvisoriesNoConflicts",
             "no-api": true
+        }
+    ],
+    "funding": [
+        {
+            "type": "github",
+            "url": "https://github.com/sponsors/tanoconsulting"
         }
     ]
 }

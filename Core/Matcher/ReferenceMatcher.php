@@ -45,6 +45,8 @@ class ReferenceMatcher extends AbstractMatcher
         //'between' => Operator::BETWEEN, => use count/length with min & max sub-members
         //'like' => Operator::LIKE, => use regex
         //'contains' => Operator::CONTAINS,
+        'isnull' => '\Symfony\Component\Validator\Constraints\IsNull',
+        'notnull' => '\Symfony\Component\Validator\Constraints\NotNull',
 
         Operator::EQ => '\Symfony\Component\Validator\Constraints\EqualTo',
         Operator::GT => '\Symfony\Component\Validator\Constraints\GreaterThan',
@@ -105,7 +107,8 @@ class ReferenceMatcher extends AbstractMatcher
                     return array(false);
 
                 case self::MATCH_NOT:
-                    return array(!reset($this->match($values)));
+                    $val = $this->match($values);
+                    return array(!reset($val));
 
                 default:
                     // we assume that all are refs because of the call to validate()

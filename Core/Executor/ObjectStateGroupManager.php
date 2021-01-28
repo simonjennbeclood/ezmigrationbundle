@@ -4,6 +4,7 @@ namespace Kaliop\eZMigrationBundle\Core\Executor;
 
 use eZ\Publish\API\Repository\Values\ObjectState\ObjectStateGroup;
 use Kaliop\eZMigrationBundle\API\Collection\ObjectStateGroupCollection;
+use Kaliop\eZMigrationBundle\API\Exception\InvalidStepDefinitionException;
 use Kaliop\eZMigrationBundle\Core\Matcher\ObjectStateGroupMatcher;
 use Kaliop\eZMigrationBundle\API\MigrationGeneratorInterface;
 use Kaliop\eZMigrationBundle\API\EnumerableMatcherInterface;
@@ -39,7 +40,7 @@ class ObjectStateGroupManager extends RepositoryExecutor implements MigrationGen
     {
         foreach (array('names', 'identifier') as $key) {
             if (!isset($step->dsl[$key])) {
-                throw new \Exception("The '$key' key is missing in a object state group creation definition");
+                throw new InvalidStepDefinitionException("The '$key' key is missing in a object state group creation definition");
             }
         }
 
@@ -69,6 +70,8 @@ class ObjectStateGroupManager extends RepositoryExecutor implements MigrationGen
     {
         $groupsCollection = $this->matchObjectStateGroups('load', $step);
 
+        $this->validateResultsCount($groupsCollection, $step);
+
         $this->setReferences($groupsCollection, $step);
 
         return $groupsCollection;
@@ -85,9 +88,7 @@ class ObjectStateGroupManager extends RepositoryExecutor implements MigrationGen
 
         $groupsCollection = $this->matchObjectStateGroups('update', $step);
 
-        if (count($groupsCollection) > 1 && isset($step->dsl['references'])) {
-            throw new \Exception("Can not execute Object State Group update because multiple groups match, and a references section is specified in the dsl. References can be set when only 1 state group matches");
-        }
+        $this->validateResultsCount($groupsCollection, $step);
 
         if (count($groupsCollection) > 1 && isset($step->dsl['identifier'])) {
             throw new \Exception("Can not execute Object State Group update because multiple groups match, and an identifier is specified in the dsl.");
@@ -124,6 +125,8 @@ class ObjectStateGroupManager extends RepositoryExecutor implements MigrationGen
     {
         $groupsCollection = $this->matchObjectStateGroups('delete', $step);
 
+        $this->validateResultsCount($groupsCollection, $step);
+
         $this->setReferences($groupsCollection, $step);
 
         $objectStateService = $this->repository->getObjectStateService();
@@ -143,26 +146,29 @@ class ObjectStateGroupManager extends RepositoryExecutor implements MigrationGen
     protected function matchObjectStateGroups($action, $step)
     {
         if (!isset($step->dsl['match'])) {
-            throw new \Exception("A match condition is required to $action an object state group");
+            throw new InvalidStepDefinitionException("A match condition is required to $action an object state group");
         }
 
         // convert the references passed in the match
         $match = $this->resolveReferencesRecursively($step->dsl['match']);
 
-        return $this->objectStateGroupMatcher->match($match);
+        $tolerateMisses = isset($step->dsl['match_tolerate_misses']) ? $this->referenceResolver->resolveReference($step->dsl['match_tolerate_misses']) : false;
+
+        return $this->objectStateGroupMatcher->match($match, $tolerateMisses);
     }
 
     /**
      * @param ObjectStateGroup $objectStateGroup
      * @param array $references the definitions of the references to set
-     * @throws \InvalidArgumentException When trying to assign a reference to an unsupported attribute
+     * @throws InvalidStepDefinitionException
      * @return array key: the reference names, values: the reference values
      */
     protected function getReferencesValues($objectStateGroup, array $references, $step)
     {
         $refs = array();
 
-        foreach ($references as $reference) {
+        foreach ($references as $key => $reference) {
+            $reference = $this->parseReferenceDefinition($key, $reference);
             switch ($reference['attribute']) {
                 case 'object_state_group_id':
                 case 'id':
@@ -170,10 +176,10 @@ class ObjectStateGroupManager extends RepositoryExecutor implements MigrationGen
                     break;
                 case 'object_state_group_identifier':
                 case 'identifier':
-                    $value = $objectStateGroup->id;
+                    $value = $objectStateGroup->identifier;
                     break;
                 default:
-                    throw new \InvalidArgumentException('Object State Group Manager does not support setting references for attribute ' . $reference['attribute']);
+                    throw new InvalidStepDefinitionException('Object State Group Manager does not support setting references for attribute ' . $reference['attribute']);
             }
 
             $refs[$reference['identifier']] = $value;

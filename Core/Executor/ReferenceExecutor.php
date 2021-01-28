@@ -1,14 +1,17 @@
 <?php
 
-
 namespace Kaliop\eZMigrationBundle\Core\Executor;
 
-use Symfony\Component\DependencyInjection\ContainerInterface;
-use Symfony\Component\Yaml\Yaml;
-use Symfony\Component\VarDumper\VarDumper;
-use Kaliop\eZMigrationBundle\API\Value\MigrationStep;
-use Kaliop\eZMigrationBundle\API\ReferenceResolverBagInterface;
 use Kaliop\eZMigrationBundle\API\EnumerableReferenceResolverInterface;
+use Kaliop\eZMigrationBundle\API\Exception\InvalidStepDefinitionException;
+use Kaliop\eZMigrationBundle\API\ReferenceResolverBagInterface;
+use Kaliop\eZMigrationBundle\API\Value\MigrationStep;
+use Symfony\Component\Console\Output\OutputInterface;
+use Symfony\Component\DependencyInjection\ContainerInterface;
+use Symfony\Component\VarDumper\Cloner\VarCloner;
+use Symfony\Component\VarDumper\Dumper\CliDumper;
+use Symfony\Component\VarDumper\Dumper\HtmlDumper;
+use Symfony\Component\Yaml\Yaml;
 
 class ReferenceExecutor extends AbstractExecutor
 {
@@ -37,13 +40,13 @@ class ReferenceExecutor extends AbstractExecutor
         parent::execute($step);
 
         if (!isset($step->dsl['mode'])) {
-            throw new \Exception("Invalid step definition: missing 'mode'");
+            throw new InvalidStepDefinitionException("Invalid step definition: missing 'mode'");
         }
 
         $action = $step->dsl['mode'];
 
         if (!in_array($action, $this->supportedActions)) {
-            throw new \Exception("Invalid step definition: value '$action' is not allowed for 'mode'");
+            throw new InvalidStepDefinitionException("Invalid step definition: value '$action' is not allowed for 'mode'");
         }
 
         $this->skipStepIfNeeded($step);
@@ -54,17 +57,37 @@ class ReferenceExecutor extends AbstractExecutor
     protected function set($dsl, $context)
     {
         if (!isset($dsl['identifier'])) {
-            throw new \Exception("Invalid step definition: miss 'identifier' for setting reference");
+            throw new InvalidStepDefinitionException("Invalid step definition: miss 'identifier' for setting reference");
         }
         if (!isset($dsl['value'])) {
-            throw new \Exception("Invalid step definition: miss 'value' for setting reference");
+            throw new InvalidStepDefinitionException("Invalid step definition: miss 'value' for setting reference");
         }
-        // this makes sense since we started supporting embedded refs...
-        $value = $this->referenceResolver->resolveReference($dsl['value']);
-        /// @todo add support for eZ dynamic parameters too
-        if (preg_match('/.*%.+%.*$/', $value)) {
-            // we use the same parameter resolving rule as symfony, even though this means abusing the ContainerInterface
-            $value = $this->container->getParameterBag()->resolveString($value);
+
+        if (!isset($dsl['resolve_references']) || $dsl['resolve_references']) {
+            // this makes sense since we started supporting embedded refs...
+            $value = $this->referenceResolver->resolveReference($dsl['value']);
+        } else {
+            $value = $dsl['value'];
+        }
+
+        if (is_string($value)) {
+            if (0 === strpos($value, '%env(') && ')%' === substr($value, -2) && '%env()%' !== $value) {
+                /// @todo find out how to use Sf components to resolve this value instead of doing it by ourselves...
+                $env = substr($value, 5, -2);
+                // we use getenv because $_ENV gets cleaned up (by whom?)
+                $val = getenv($env);
+                if ($val === false) {
+                    throw new \Exception("Env var $env seems not to be defined");
+                }
+                $value = $val;
+            } else {
+                /// @todo add support for eZ dynamic parameters too
+
+                if (preg_match('/.*%.+%.*$/', $value)) {
+                    // we use the same parameter resolving rule as symfony, even though this means abusing the ContainerInterface
+                    $value = $this->container->getParameterBag()->resolveString($value);
+                }
+            }
         }
 
         $overwrite = isset($dsl['overwrite']) ? $overwrite = $dsl['overwrite'] : false;
@@ -76,7 +99,7 @@ class ReferenceExecutor extends AbstractExecutor
     protected function load($dsl, $context)
     {
         if (!isset($dsl['file'])) {
-            throw new \Exception("Invalid step definition: miss 'file' for loading references");
+            throw new InvalidStepDefinitionException("Invalid step definition: miss 'file' for loading references");
         }
         $fileName = $this->referenceResolver->resolveReference($dsl['file']);
         $fileName = str_replace('{ENV}', $this->container->get('kernel')->getEnvironment(), $fileName);
@@ -88,7 +111,7 @@ class ReferenceExecutor extends AbstractExecutor
         }
 
         if (!is_file($fileName)) {
-            throw new \Exception("Invalid step definition: invalid file '$fileName' for loading references");
+            throw new InvalidStepDefinitionException("Invalid step definition: invalid file '$fileName' for loading references");
         }
         $data = file_get_contents($fileName);
 
@@ -102,7 +125,7 @@ class ReferenceExecutor extends AbstractExecutor
                 $data = Yaml::parse($data);
                 break;
             default:
-                throw new \Exception("Invalid step definition: unsupported file extension '$ext' for loading references from");
+                throw new InvalidStepDefinitionException("Invalid step definition: unsupported file extension '$ext' for loading references from");
         }
 
         if (!is_array($data)) {
@@ -128,7 +151,7 @@ class ReferenceExecutor extends AbstractExecutor
     protected function save($dsl, $context)
     {
         if (!isset($dsl['file'])) {
-            throw new \Exception("Invalid step definition: miss 'file' for saving references");
+            throw new InvalidStepDefinitionException("Invalid step definition: miss 'file' for saving references");
         }
         $fileName = $this->referenceResolver->resolveReference($dsl['file']);
         $fileName = str_replace('{ENV}', $this->container->get('kernel')->getEnvironment(), $fileName);
@@ -152,10 +175,11 @@ class ReferenceExecutor extends AbstractExecutor
                 break;
             case 'yml':
             case 'yaml':
+            /// @todo use Yaml::DUMP_EMPTY_ARRAY_AS_SEQUENCE option if it is supported
                 $data = Yaml::dump($data);
                 break;
             default:
-                throw new \Exception("Invalid step definition: unsupported file extension '$ext' for saving references to");
+                throw new InvalidStepDefinitionException("Invalid step definition: unsupported file extension '$ext' for saving references to");
         }
 
         file_put_contents($fileName, $data);
@@ -166,19 +190,55 @@ class ReferenceExecutor extends AbstractExecutor
     protected function dump($dsl, $context)
     {
         if (!isset($dsl['identifier'])) {
-            throw new \Exception("Invalid step definition: miss 'identifier' for dumping reference");
+            throw new InvalidStepDefinitionException("Invalid step definition: miss 'identifier' for dumping reference");
         }
         if (!$this->referenceResolver->isReference($dsl['identifier'])) {
             throw new \Exception("Invalid step definition: identifier '{$dsl['identifier']}' is not a reference");
         }
-        if (isset($dsl['label'])) {
-            echo $dsl['label'];
-        } else {
-            VarDumper::dump($dsl['identifier']);
+        if (isset($context['output']) && $context['output'] instanceof OutputInterface && $context['output']->isQuiet()) {
+            return $this->referenceResolver->resolveReference($dsl['identifier']);
         }
-        $value = $this->referenceResolver->resolveReference($dsl['identifier']);
-        VarDumper::dump($value);
+
+        if (isset($dsl['label'])) {
+            $label = $dsl['label'];
+        } else {
+            $label = $this->dumpVar($dsl['identifier']);
+        }
+        $value = $this->dumpVar($this->referenceResolver->resolveReference($dsl['identifier']));
+
+        if (isset($context['output']) && $context['output'] instanceof OutputInterface) {
+            $context['output']->write($label . $value, false, OutputInterface::OUTPUT_RAW|OutputInterface::VERBOSITY_NORMAL);
+        } else {
+            echo $label . $value;
+        }
 
         return $value;
+    }
+
+    /**
+     * Similar to VarDumper::dump(), but returns the output
+     * @param mixed $var
+     * @return string
+     * @throws \ErrorException
+     */
+    protected function dumpVar($var)
+    {
+        $cloner = new VarCloner();
+        $dumper = \in_array(\PHP_SAPI, ['cli', 'phpdbg'], true) ? new CliDumper() : new HtmlDumper();
+        $output = '';
+
+        $dumper->dump(
+            $cloner->cloneVar($var),
+            function ($line, $depth) use (&$output) {
+                // A negative depth means "end of dump"
+                if ($depth >= 0) {
+                    // Adds a two spaces indentation to the line
+                    /// @todo should we use NBSP for html dumping?
+                    $output .= str_repeat('  ', $depth) . $line . "\n";
+                }
+            }
+        );
+
+        return $output;
     }
 }

@@ -4,6 +4,7 @@ namespace Kaliop\eZMigrationBundle\Core\Executor;
 
 use Kaliop\eZMigrationBundle\API\Collection\LocationCollection;
 use Kaliop\eZMigrationBundle\API\Collection\TrashedItemCollection;
+use Kaliop\eZMigrationBundle\API\Exception\InvalidStepDefinitionException;
 use Kaliop\eZMigrationBundle\Core\Matcher\TrashMatcher;
 use Kaliop\eZMigrationBundle\Core\Helper\SortConverter;
 
@@ -12,7 +13,7 @@ use Kaliop\eZMigrationBundle\Core\Helper\SortConverter;
  */
 class TrashManager extends RepositoryExecutor
 {
-    protected $supportedActions = array('purge', 'recover', 'delete');
+    protected $supportedActions = array('purge', 'recover', 'load', 'delete');
     protected $supportedStepTypes = array('trash');
 
     /** @var TrashMatcher $trashMatcher */
@@ -50,9 +51,7 @@ class TrashManager extends RepositoryExecutor
     {
         $itemsCollection = $this->matchItems('restore', $step);
 
-        if (count($itemsCollection) > 1 && array_key_exists('references', $step->dsl)) {
-            throw new \Exception("Can not execute Trash restore because multiple items match, and a references section is specified in the dsl. References can be set when only 1 item matches");
-        }
+        $this->validateResultsCount($itemsCollection, $step);
 
         $locations = array();
         $trashService = $this->repository->getTrashService();
@@ -65,12 +64,25 @@ class TrashManager extends RepositoryExecutor
         return $itemsCollection;
     }
 
+    protected function load($step)
+    {
+        $itemsCollection = $this->matchItems('load', $step);
+
+        $this->validateResultsCount($itemsCollection, $step);
+
+        $this->setReferences($itemsCollection, $step);
+
+        return $itemsCollection;
+    }
+
     /**
      * Handles the trash-delete migration action
      */
     protected function delete($step)
     {
         $itemsCollection = $this->matchItems('delete', $step);
+
+        $this->validateResultsCount($itemsCollection, $step);
 
         $this->setReferences($itemsCollection, $step);
 
@@ -92,7 +104,7 @@ class TrashManager extends RepositoryExecutor
     protected function matchItems($action, $step)
     {
         if (!isset($step->dsl['match'])) {
-            throw new \Exception("A match condition is required to $action trash items");
+            throw new InvalidStepDefinitionException("A match condition is required to $action trash items");
         }
 
         // convert the references passed in the match
@@ -104,14 +116,16 @@ class TrashManager extends RepositoryExecutor
     /**
      * @param \eZ\Publish\API\Repository\Values\Content\TrashItem|\eZ\Publish\API\Repository\Values\Content\Location $item
      * @param array $references the definitions of the references to set
-     * @throws \InvalidArgumentException When trying to assign a reference to an unsupported attribute
+     * @param $step
+     * @throws InvalidStepDefinitionException
      * @return array key: the reference names, values: the reference values
      */
     protected function getReferencesValues($item, array $references, $step)
     {
         $refs = array();
 
-        foreach ($references as $reference) {
+        foreach ($references as $key => $reference) {
+            $reference = $this->parseReferenceDefinition($key, $reference);
             switch ($reference['attribute']) {
                 // a trashed item extends a location, so in theory everything 'location' here should work
                 case 'location_id':
@@ -186,7 +200,7 @@ class TrashManager extends RepositoryExecutor
                     $value = $this->sortConverter->sortOrder2Hash($item->sortOrder);
                     break;
                 default:
-                    throw new \InvalidArgumentException('Trash Manager does not support setting references for attribute ' . $reference['attribute']);
+                    throw new InvalidStepDefinitionException('Trash Manager does not support setting references for attribute ' . $reference['attribute']);
             }
 
             $refs[$reference['identifier']] = $value;

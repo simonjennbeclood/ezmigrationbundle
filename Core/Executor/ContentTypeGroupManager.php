@@ -4,6 +4,7 @@ namespace Kaliop\eZMigrationBundle\Core\Executor;
 
 use eZ\Publish\API\Repository\Values\ContentType\ContentTypeGroup;
 use Kaliop\eZMigrationBundle\API\Collection\ContentTypeGroupCollection;
+use Kaliop\eZMigrationBundle\API\Exception\InvalidStepDefinitionException;
 use Kaliop\eZMigrationBundle\API\MigrationGeneratorInterface;
 use Kaliop\eZMigrationBundle\API\EnumerableMatcherInterface;
 use Kaliop\eZMigrationBundle\Core\Matcher\ContentTypeGroupMatcher;
@@ -13,6 +14,7 @@ use Kaliop\eZMigrationBundle\Core\Matcher\ContentTypeGroupMatcher;
  */
 class ContentTypeGroupManager extends RepositoryExecutor implements MigrationGeneratorInterface, EnumerableMatcherInterface
 {
+    protected $supportedActions = array('create', 'load', 'update', 'delete');
     protected $supportedStepTypes = array('content_type_group');
 
     /** @var ContentTypeGroupMatcher $contentTypeGroupMatcher */
@@ -34,7 +36,7 @@ class ContentTypeGroupManager extends RepositoryExecutor implements MigrationGen
     protected function create($step)
     {
         if (!isset($step->dsl['identifier'])) {
-            throw new \Exception("The 'identifier' key is required to create a new content type group.");
+            throw new InvalidStepDefinitionException("The 'identifier' key is required to create a new content type group.");
         }
 
         $contentTypeService = $this->repository->getContentTypeService();
@@ -53,13 +55,22 @@ class ContentTypeGroupManager extends RepositoryExecutor implements MigrationGen
         return $group;
     }
 
+    protected function load($step)
+    {
+        $groupsCollection = $this->matchContentTypeGroups('load', $step);
+
+        $this->validateResultsCount($groupsCollection, $step);
+
+        $this->setReferences($groupsCollection, $step);
+
+        return $groupsCollection;
+    }
+
     protected function update($step)
     {
         $groupsCollection = $this->matchContentTypeGroups('update', $step);
 
-        if (count($groupsCollection) > 1 && array_key_exists('references', $step->dsl)) {
-            throw new \Exception("Can not execute Content Type Group update because multiple types match, and a references section is specified in the dsl. References can be set when only 1 matches");
-        }
+        $this->validateResultsCount($groupsCollection, $step);
 
         $contentTypeService = $this->repository->getContentTypeService();
 
@@ -88,6 +99,8 @@ class ContentTypeGroupManager extends RepositoryExecutor implements MigrationGen
     {
         $groupsCollection = $this->matchContentTypeGroups('delete', $step);
 
+        $this->validateResultsCount($groupsCollection, $step);
+
         $this->setReferences($groupsCollection, $step);
 
         $contentTypeService = $this->repository->getContentTypeService();
@@ -107,26 +120,30 @@ class ContentTypeGroupManager extends RepositoryExecutor implements MigrationGen
     protected function matchContentTypeGroups($action, $step)
     {
         if (!isset($step->dsl['match'])) {
-            throw new \Exception("A match condition is required to $action an object state group");
+            throw new InvalidStepDefinitionException("A match condition is required to $action an object state group");
         }
 
         // convert the references passed in the match
         $match = $this->resolveReferencesRecursively($step->dsl['match']);
 
-        return $this->contentTypeGroupMatcher->match($match);
+        $tolerateMisses = isset($step->dsl['match_tolerate_misses']) ? $this->referenceResolver->resolveReference($step->dsl['match_tolerate_misses']) : false;
+
+        return $this->contentTypeGroupMatcher->match($match, $tolerateMisses);
     }
 
     /**
      * @param ContentTypeGroup $object
      * @param array $references the definitions of the references to set
-     * @throws \InvalidArgumentException When trying to assign a reference to an unsupported attribute
+     * @throws InvalidStepDefinitionException
      * @return array key: the reference names, values: the reference values
      */
     protected function getReferencesValues($object, array $references, $step)
     {
         $refs = array();
 
-        foreach ($references as $reference) {
+        foreach ($references as $key => $reference) {
+
+            $reference = $this->parseReferenceDefinition($key, $reference);
 
             switch ($reference['attribute']) {
                 case 'content_type_group_id':
@@ -138,7 +155,7 @@ class ContentTypeGroupManager extends RepositoryExecutor implements MigrationGen
                     $value = $object->identifier;
                     break;
                 default:
-                    throw new \InvalidArgumentException('Content Type Group Manager does not support setting references for attribute ' . $reference['attribute']);
+                    throw new InvalidStepDefinitionException('Content Type Group Manager does not support setting references for attribute ' . $reference['attribute']);
             }
 
             $refs[$reference['identifier']] = $value;

@@ -4,6 +4,7 @@ namespace Kaliop\eZMigrationBundle\Core\Executor;
 
 use eZ\Publish\API\Repository\Values\Content\Section;
 use Kaliop\eZMigrationBundle\API\Collection\SectionCollection;
+use Kaliop\eZMigrationBundle\API\Exception\InvalidStepDefinitionException;
 use Kaliop\eZMigrationBundle\API\MigrationGeneratorInterface;
 use Kaliop\eZMigrationBundle\API\EnumerableMatcherInterface;
 use Kaliop\eZMigrationBundle\Core\Matcher\SectionMatcher;
@@ -34,7 +35,7 @@ class SectionManager extends RepositoryExecutor implements MigrationGeneratorInt
     {
         foreach (array('name', 'identifier') as $key) {
             if (!isset($step->dsl[$key])) {
-                throw new \Exception("The '$key' key is missing in a section creation definition");
+                throw new InvalidStepDefinitionException("The '$key' key is missing in a section creation definition");
             }
         }
 
@@ -57,6 +58,8 @@ class SectionManager extends RepositoryExecutor implements MigrationGeneratorInt
     {
         $sectionCollection = $this->matchSections('load', $step);
 
+        $this->validateResultsCount($sectionCollection, $step);
+
         $this->setReferences($sectionCollection, $step);
 
         return $sectionCollection;
@@ -69,9 +72,7 @@ class SectionManager extends RepositoryExecutor implements MigrationGeneratorInt
     {
         $sectionCollection = $this->matchSections('update', $step);
 
-        if (count($sectionCollection) > 1 && array_key_exists('references', $step->dsl)) {
-            throw new \Exception("Can not execute Section update because multiple sections match, and a references section is specified in the dsl. References can be set when only 1 section matches");
-        }
+        $this->validateResultsCount($sectionCollection, $step);
 
         $sectionService = $this->repository->getSectionService();
         foreach ($sectionCollection as $key => $section) {
@@ -101,6 +102,8 @@ class SectionManager extends RepositoryExecutor implements MigrationGeneratorInt
     {
         $sectionCollection = $this->matchSections('delete', $step);
 
+        $this->validateResultsCount($sectionCollection, $step);
+
         $this->setReferences($sectionCollection, $step);
 
         $sectionService = $this->repository->getSectionService();
@@ -120,26 +123,29 @@ class SectionManager extends RepositoryExecutor implements MigrationGeneratorInt
     protected function matchSections($action, $step)
     {
         if (!isset($step->dsl['match'])) {
-            throw new \Exception("A match condition is required to $action a section");
+            throw new InvalidStepDefinitionException("A match condition is required to $action a section");
         }
 
         // convert the references passed in the match
         $match = $this->resolveReferencesRecursively($step->dsl['match']);
 
-        return $this->sectionMatcher->match($match);
+        $tolerateMisses = isset($step->dsl['match_tolerate_misses']) ? $this->referenceResolver->resolveReference($step->dsl['match_tolerate_misses']) : false;
+
+        return $this->sectionMatcher->match($match, $tolerateMisses);
     }
 
     /**
      * @param Section $section
      * @param array $references the definitions of the references to set
-     * @throws \InvalidArgumentException When trying to assign a reference to an unsupported attribute
+     * @throws InvalidStepDefinitionException
      * @return array key: the reference names, values: the reference values
      */
     protected function getReferencesValues($section, array $references, $step)
     {
         $refs = array();
 
-        foreach ($references as $reference) {
+        foreach ($references as $key => $reference) {
+            $reference = $this->parseReferenceDefinition($key, $reference);
             switch ($reference['attribute']) {
                 case 'section_id':
                 case 'id':
@@ -154,7 +160,7 @@ class SectionManager extends RepositoryExecutor implements MigrationGeneratorInt
                     $value = $section->name;
                     break;
                 default:
-                    throw new \InvalidArgumentException('Section Manager does not support setting references for attribute ' . $reference['attribute']);
+                    throw new InvalidStepDefinitionException('Section Manager does not support setting references for attribute ' . $reference['attribute']);
             }
 
             $refs[$reference['identifier']] = $value;

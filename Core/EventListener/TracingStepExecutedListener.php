@@ -2,6 +2,7 @@
 
 namespace Kaliop\eZMigrationBundle\Core\EventListener;
 
+use Kaliop\eZMigrationBundle\API\Event\BeforeStepExecutionEvent;
 use Kaliop\eZMigrationBundle\API\Event\StepExecutedEvent;
 use Kaliop\eZMigrationBundle\API\Event\MigrationAbortedEvent;
 use Kaliop\eZMigrationBundle\API\Event\MigrationSuspendedEvent;
@@ -21,6 +22,8 @@ class TracingStepExecutedListener
     protected $minVerbosityLevel = OutputInterface::VERBOSITY_VERBOSE;
     protected $entity = 'migration';
     protected $enabled = true;
+    protected $stepStartTime;
+    protected $stepStartMemory;
 
     public function __construct($enabled = true)
     {
@@ -51,19 +54,68 @@ class TracingStepExecutedListener
         $this->enabled = false;
     }
 
+    public function onBeforeStepExecution(BeforeStepExecutionEvent $event) {
+        if (!$this->enabled) {
+            return;
+        }
+
+        // optimization - only valid because we only echo in this method at std levels and higher
+        if ($this->output && $this->output->getVerbosity() < $this->minVerbosityLevel) {
+            return;
+        }
+
+        if ($this->output && $this->output->isVeryVerbose()) {
+            $this->stepStartTime = microtime(true);
+            $this->stepStartMemory = memory_get_usage(true);
+        }
+
+        $type = $event->getStep()->type;
+        $dsl = $event->getStep()->dsl;
+        $context = $event->getStep()->context;
+        $stepNr = '';
+        if (isset($context['step'])) {
+            $stepNr = "{$context['step']}: ";
+        }
+        if (isset($dsl['mode'])) {
+            $type .= ' / ' . $dsl['mode'];
+        }
+        $out = $this->entity . " step $stepNr'$type' will be executed...";
+
+        $this->echoMessage($out, OutputInterface::VERBOSITY_VERY_VERBOSE);
+    }
+
     public function onStepExecuted(StepExecutedEvent $event)
     {
         if (!$this->enabled) {
             return;
         }
 
+        // optimization - only valid because we only echo in this method at std levels and higher
+        if ($this->output && $this->output->getVerbosity() < $this->minVerbosityLevel) {
+            return;
+        }
+
+        if ($this->output && $this->output->isVeryVerbose()) {
+            $stepTime = microtime(true) - $this->stepStartTime;
+            $stepMemory = memory_get_usage(true) - $this->stepStartMemory;
+        }
+
         $obj = $event->getResult();
         $type = $event->getStep()->type;
         $dsl = $event->getStep()->dsl;
+        $context = $event->getStep()->context;
+        $stepNr = '';
+        if (isset($context['step'])) {
+            $stepNr = "{$context['step']}: ";
+        }
 
         switch ($type) {
+            case 'trash':
+                $type = 'trashed_item';
+                // fall through voluntarily
             case 'content':
             case 'content_type':
+            case 'content_type_group':
             case 'language':
             case 'location':
             case 'object_state':
@@ -74,20 +126,38 @@ class TracingStepExecutedListener
             case 'user':
             case 'user_group':
                 $action = isset($dsl['mode']) ? ($dsl['mode'] == 'load' ? 'loaded' : ($dsl['mode'] . 'd')) : 'acted upon';
-                $out = $type . ' ' . $this->getObjectIdentifierAsString($obj) . ' has been ' . $action;
+                $verb = 'has';
+                $prefix = '';
+                if ($obj instanceof AbstractCollection || is_array($obj)) {
+                    $count = count($obj);
+                    if ($count == 0) {
+                        $prefix = 'no ';
+                        $label = '';
+                    } else {
+                        $label = ' ' . $this->getObjectIdentifierAsString($obj);
+                        if (count($obj) > 1) {
+                            $verb = 'have';
+                        }
+                    }
+                }
+                $out = $this->entity . " step {$stepNr}{$prefix}{$type}{$label} {$verb} been {$action}";
                 break;
             case 'sql':
-                $out = 'sql has been executed';
+                $out = $this->entity . " step {$stepNr}sql has been executed";
                 break;
             case 'php':
-                $out = "class '{$dsl['class']}' has been executed";
+                $out = $this->entity . " step {$stepNr}class '{$dsl['class']}' has been executed";
                 break;
             default:
                 // custom migration step types...
                 if (isset($dsl['mode'])) {
                     $type .= ' / ' . $dsl['mode'];
                 }
-                $out = $this->entity . " step '$type' has been executed";
+                $out = $this->entity . " step $stepNr'$type' has been executed";
+        }
+
+        if ($this->output && $this->output->isVeryVerbose()) {
+           $out .= sprintf(". <info>Time taken: %.3f secs, memory delta: %d bytes</info>", $stepTime, $stepMemory);
         }
 
         $this->echoMessage($out);
@@ -127,10 +197,10 @@ class TracingStepExecutedListener
         $this->echoMessage($out);
     }
 
-    protected function echoMessage($out)
+    protected function echoMessage($out, $verbosity = null)
     {
         if ($this->output) {
-            if ($this->output->getVerbosity() >= $this->minVerbosityLevel) {
+            if ($this->output->getVerbosity() >= ($verbosity ? $verbosity : $this->minVerbosityLevel)) {
                 $this->output->writeln($out);
             }
         } else {
@@ -142,8 +212,15 @@ class TracingStepExecutedListener
     {
         if ($objOrCollection instanceof AbstractCollection || is_array($objOrCollection)) {
             $out = array();
-            foreach ($objOrCollection as $obj) {
+            if ($objOrCollection instanceof AbstractCollection) {
+                $objOrCollection = $objOrCollection->getArrayCopy();
+            }
+            // totally arbitrary limit
+            foreach (array_slice($objOrCollection, 0, 25) as $obj) {
                 $out[] = $this->getObjectIdentifierAsString($obj);
+            }
+            if (count($objOrCollection) > 25) {
+                $out[24] = 'etc...';
             }
             return implode(", ", $out);
         }
@@ -165,7 +242,8 @@ class TracingStepExecutedListener
                 ) {
                     return "'" . $objOrCollection->identifier . "'";
                 }
-                if ($objOrCollection instanceof \eZ\Publish\API\Repository\Values\Content\Location) {
+                if ($objOrCollection instanceof \eZ\Publish\API\Repository\Values\Content\Location ||
+                    $objOrCollection instanceof \eZ\Publish\API\Repository\Values\Content\TrashItem) {
                     return "'" . $objOrCollection->pathString . "'";
                 }
                 if ($objOrCollection instanceof \eZ\Publish\API\Repository\Values\Content\Language) {

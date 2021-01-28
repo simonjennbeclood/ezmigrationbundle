@@ -283,10 +283,76 @@
     version_creator: anonymous
     attributes:
         ezstring: hello world 3
+        # Issue # 224
+        ezcountry: ALB
     references:
         -
             identifier: kmb_test_004_3
             attribute: object_id
+        -
+            identifier: kmb_test_004_3_ezcountry
+            attribute: 'attributes.ezcountry[0]'
+            overwrite: true
+
+-
+    type: assert
+    target: reference
+    identifier: reference:kmb_test_004_3_ezcountry
+    test:
+        equals: AL
+
+-
+    type: reference
+    mode: set
+    identifier: kmb_test_004_3_ezcountry_set
+    value: [ AFG ]
+
+-
+    type: content
+    mode: update
+    match:
+        location_remote_id: kmb_test_004_3_location_remote_id
+    attributes:
+        ezcountry: reference:kmb_test_004_3_ezcountry_set
+    references:
+        -
+            identifier: kmb_test_004_3_ezcountry
+            attribute: 'attributes.ezcountry[0]'
+            overwrite: true
+
+-
+    type: assert
+    target: reference
+    identifier: reference:kmb_test_004_3_ezcountry
+    test:
+        equals: AF
+
+-
+    type: reference
+    mode: set
+    identifier: kmb_test_004_3_ezcountry_set
+    overwrite: true
+    value: Algeria
+
+-
+    type: content
+    mode: update
+    match:
+        location_remote_id: kmb_test_004_3_location_remote_id
+    attributes:
+        ezcountry: [ 'reference:kmb_test_004_3_ezcountry_set' ]
+    references:
+        -
+            identifier: kmb_test_004_3_ezcountry
+            attribute: 'attributes.ezcountry[0]'
+            overwrite: true
+
+-
+    type: assert
+    target: reference
+    identifier: reference:kmb_test_004_3_ezcountry
+    test:
+        equals: DZ
 
 -
     type: content_type
@@ -313,11 +379,10 @@
         - ezimage:
             path: blank.jpg
             alt_text: a blank 1x1 px image
-            filename: lol1
+            filename: lol1.jpg
         - ezbinaryfile:
             path: emptyfile.txt
             filename: lol2.txt
-            mime_type: something/else
         - ezmedia:
             path: small.flv
             filename: lol3.flv

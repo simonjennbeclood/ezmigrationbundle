@@ -80,14 +80,16 @@
     # The list in references tells the manager to store specific values for later use by other steps in the current migration.
     # NB: these are NEW VARIABLES THAT YOU ARE CREATING. They are not used in the current migration step!
     references: # Optional
+        # short syntax:
+        referenceId: attributeId # (possible values and meaning are explained for the 'long syntax')
+        # long syntax:
         -
             identifier: referenceId # A string used to identify the reference
             attribute: attributeId # An attribute to get the value of for the reference.
                                    # Supports: role_id and role_identifier
                                    # The shorthand 'id' can be used instead of 'role_id'
                                    # The shorthand 'identifier' can be used instead of 'role_identifier'
-    references_type: "array" # Optional. If not set, created references values will be scalars. If set, they will be arrays
-    references_allow_empty: bool # optional. Set it to allow array references to be empty without it being considered an error
+            overwrite: true|false # Optional, default false. If not set, and the reference already exists, an exception is thrown
     if: # Optional. If set, the migration step will be skipped unless the condition is matched
         "reference:_ref_name": # name of a reference to be used for the test
             _operator_: value # allowed operators: eq, gt, gte, lt, lte, ne, count, length, regexp, satisfies
@@ -111,6 +113,7 @@
                 _condition_: value # where _condition_ can be any of ones specified above, including 'and' and 'or'
         not: # matches elements NOT satisfying the wrapped condition
             _condition_: value # where _condition_ can be any of ones specified above, including 'and' and 'or'
+    match_tolerate_misses: false # optional. Do not fail the execution if there is no item matching, when matching by id or identifier
     new_name: # Optional (note: this field might be renamed in the future)
     assign: # Optional
         -
@@ -137,6 +140,9 @@
     # The list in references tells the manager to store specific values for later use by other steps in the current migration.
     # NB: these are NEW VARIABLES THAT YOU ARE CREATING. They are not used in the current migration step!
     references: # Optional
+        # short syntax:
+        referenceId: attributeId # (possible values and meaning are explained for the 'long syntax')
+        # long syntax:
         -
             identifier: referenceId # A string used to identify the reference
             attribute: attributeId # An attribute to get the value of for the reference.
@@ -144,8 +150,11 @@
                                    # The shorthand 'id' can be used instead of 'role_id'
                                    # The shorthand 'identifier' can be used instead of 'role_identifier'
                                    # 'count' can be used to set a reference to the number of items matched
-    references_type: "array" # Optional. If not set, created references values will be scalars. If set, they will be arrays
-    references_allow_empty: bool # optional. Set it to allow array references to be empty without it being considered an error
+            overwrite: true|false # Optional, default false. If not set, and the reference already exists, an exception is thrown
+    expect: one|any|many # Optional. If set, the number of matched items will be validated, and the type of values set to created references will change
+                         # 'one': only one element should be matched; reference values will be scalars
+                         # 'any': zero or more element should be matched; reference values will be arrays
+                         # 'many': one or more element should be matched; reference values will be arrays
     if: # Optional. If set, the migration step will be skipped unless the condition is matched
         "reference:_ref_name": # name of a reference to be used for the test
             _operator_: value # allowed operators: eq, gt, gte, lt, lte, ne, count, length, regexp, satisfies
@@ -169,9 +178,12 @@
                 _condition_: value # where _condition_ can be any of ones specified above, including 'and' and 'or'
         not: # matches elements NOT satisfying the wrapped condition
             _condition_: value # where _condition_ can be any of ones specified above, including 'and' and 'or'
+    match_tolerate_misses: false # optional. Do not fail the execution if there is no item matching, when matching by id or identifier
     references: # Optional. See above for allowed values
-    references_type: "array" # Optional. If not set, created references values will be scalars. If set, they will be arrays
-    references_allow_empty: bool # optional. Set it to allow array references to be empty without it being considered an error
+    expect: one|any|many # Optional. If set, the number of matched items will be validated, and the type of values set to created references will change
+                         # 'one': only one element should be matched; reference values will be scalars
+                         # 'any': zero or more element should be matched; reference values will be arrays
+                         # 'many': one or more element should be matched; reference values will be arrays
     if: # Optional. If set, the migration step will be skipped unless the condition is matched
         "reference:_ref_name": # name of a reference to be used for the test
             _operator_: value # allowed operators: eq, gt, gte, lt, lte, ne, count, length, regexp, satisfies
@@ -195,9 +207,12 @@
                 _condition_: value # where _condition_ can be any of ones specified above, including 'and' and 'or'
         not: # matches elements NOT satisfying the wrapped condition
             _condition_: value # where _condition_ can be any of ones specified above, including 'and' and 'or'
+    match_tolerate_misses: false # optional. Do not fail the execution if there is no item matching, when matching by id or identifier
     references: # Optional. See above for allowed values
-    references_type: "array" # Optional. If not set, created references values will be scalars. If set, they will be arrays
-    references_allow_empty: bool # optional. Set it to allow array references to be empty without it being considered an error
+    expect: one|any|many # Optional. If set, the number of matched items will be validated, and the type of values set to created references will change
+                         # 'one': only one element should be matched; reference values will be scalars
+                         # 'any': zero or more element should be matched; reference values will be arrays
+                         # 'many': one or more element should be matched; reference values will be arrays
     if: # Optional. If set, the migration step will be skipped unless the condition is matched
         "reference:_ref_name": # name of a reference to be used for the test
             _operator_: value # allowed operators: eq, gt, gte, lt, lte, ne, count, length, regexp, satisfies

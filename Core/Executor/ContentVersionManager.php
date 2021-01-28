@@ -5,6 +5,7 @@ namespace Kaliop\eZMigrationBundle\Core\Executor;
 use eZ\Publish\API\Repository\Values\Content\VersionInfo;
 use eZ\Publish\Core\Base\Exceptions\NotFoundException;
 use Kaliop\eZMigrationBundle\API\Collection\VersionInfoCollection;
+use Kaliop\eZMigrationBundle\API\Exception\InvalidStepDefinitionException;
 use Kaliop\eZMigrationBundle\Core\Matcher\ContentVersionMatcher;
 use Kaliop\eZMigrationBundle\Core\FieldHandlerManager;
 use Kaliop\eZMigrationBundle\Core\Matcher\ContentMatcher;
@@ -52,6 +53,8 @@ class ContentVersionManager extends ContentManager
     {
         $versionCollection = $this->matchVersions('load', $step);
 
+        $this->validateResultsCount($versionCollection, $step);
+
         $this->setReferences($versionCollection, $step);
 
         return $versionCollection;
@@ -63,6 +66,8 @@ class ContentVersionManager extends ContentManager
     protected function delete($step)
     {
         $versionCollection = $this->matchVersions('delete', $step);
+
+        $this->validateResultsCount($versionCollection, $step);
 
         $this->setReferences($versionCollection, $step);
 
@@ -88,11 +93,11 @@ class ContentVersionManager extends ContentManager
     protected function matchVersions($action, $step)
     {
         if (!isset($step->dsl['object_id']) && !isset($step->dsl['remote_id']) && !isset($step->dsl['match'])) {
-            throw new \Exception("The id or remote id of an object or a match condition is required to $action a content version");
+            throw new InvalidStepDefinitionException("The id or remote id of an object or a match condition is required to $action a content version");
         }
 
         if (!isset($step->dsl['match_versions']) && !isset($step->dsl['versions'])) {
-            throw new \Exception("A verision match condition is required to $action a content version");
+            throw new InvalidStepDefinitionException("A version match condition is required to $action a content version");
         }
 
         // Backwards compat
@@ -121,7 +126,9 @@ class ContentVersionManager extends ContentManager
         $offset = isset($step->dsl['match_offset']) ? $this->referenceResolver->resolveReference($step->dsl['match_offset']) : 0;
         $limit = isset($step->dsl['match_limit']) ? $this->referenceResolver->resolveReference($step->dsl['match_limit']) : 0;
 
-        return $this->versionMatcher->match($match, $matchVersions, $sort, $offset, $limit);
+        $tolerateMisses = isset($step->dsl['match_tolerate_misses']) ? $this->referenceResolver->resolveReference($step->dsl['match_tolerate_misses']) : false;
+
+        return $this->versionMatcher->match($match, $matchVersions, $sort, $offset, $limit, $tolerateMisses);
     }
 
     /**
@@ -129,6 +136,7 @@ class ContentVersionManager extends ContentManager
      * @param array $references
      * @param $step
      * @return array
+     * @throws InvalidStepDefinitionException
      *
      * @todo allow setting more refs: creation date, modification date, creator id, langauge codes
      */
@@ -136,7 +144,8 @@ class ContentVersionManager extends ContentManager
     {
         $refs = array();
 
-        foreach ($references as $reference) {
+        foreach ($references as $key => $reference) {
+            $reference = $this->parseReferenceDefinition($key, $reference);
             switch ($reference['attribute']) {
                 case 'version_no':
                     $value = $versionInfo->versionNo;
@@ -145,8 +154,9 @@ class ContentVersionManager extends ContentManager
                     $value = $this->versionStatusToHash($versionInfo->status);
                     break;
                 default:
-                    // NB: this will generate an error if the user tries to seta  ref to a field value
-                    $value = reset(parent::getReferencesValues($versionInfo, array($references), $step));
+                    // NB: this will generate an error if the user tries to set a ref to a field value
+                    $value = parent::getReferencesValues($versionInfo, array($references), $step);
+                    $value = reset($value);
             }
 
             $refs[$reference['identifier']] = $value;

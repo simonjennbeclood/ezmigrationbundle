@@ -4,6 +4,7 @@ namespace Kaliop\eZMigrationBundle\Core\Executor;
 
 use eZ\Publish\API\Repository\Values\Content\Content;
 use eZ\Publish\API\Repository\Values\User\UserGroup;
+use Kaliop\eZMigrationBundle\API\Exception\InvalidStepDefinitionException;
 use Kaliop\eZMigrationBundle\Core\Matcher\UserGroupMatcher;
 use Kaliop\eZMigrationBundle\API\Collection\UserGroupCollection;
 use Kaliop\eZMigrationBundle\Core\Matcher\RoleMatcher;
@@ -79,6 +80,8 @@ class UserGroupManager extends RepositoryExecutor
     {
         $userGroupCollection = $this->matchUserGroups('load', $step);
 
+        $this->validateResultsCount($userGroupCollection, $step);
+
         $this->setReferences($userGroupCollection, $step);
 
         return $userGroupCollection;
@@ -93,9 +96,7 @@ class UserGroupManager extends RepositoryExecutor
     {
         $userGroupCollection = $this->matchUserGroups('update', $step);
 
-        if (count($userGroupCollection) > 1 && isset($step->dsl['references'])) {
-            throw new \Exception("Can not execute Group update because multiple groups match, and a references section is specified in the dsl. References can be set when only 1 group matches");
-        }
+        $this->validateResultsCount($userGroupCollection, $step);
 
         $userService = $this->repository->getUserService();
         $contentService = $this->repository->getContentService();
@@ -159,6 +160,8 @@ class UserGroupManager extends RepositoryExecutor
     {
         $userGroupCollection = $this->matchUserGroups('delete', $step);
 
+        $this->validateResultsCount($userGroupCollection, $step);
+
         $this->setReferences($userGroupCollection, $step);
 
         $userService = $this->repository->getUserService();
@@ -178,7 +181,7 @@ class UserGroupManager extends RepositoryExecutor
     protected function matchUserGroups($action, $step)
     {
         if (!isset($step->dsl['id']) && !isset($step->dsl['group']) && !isset($step->dsl['match'])) {
-            throw new \Exception("The id of a user group or a match condition is required to $action it");
+            throw new InvalidStepDefinitionException("The id of a user group or a match condition is required to $action it");
         }
 
         // Backwards compat
@@ -196,13 +199,15 @@ class UserGroupManager extends RepositoryExecutor
         // convert the references passed in the match
         $match = $this->resolveReferencesRecursively($match);
 
-        return $this->userGroupMatcher->match($match);
+        $tolerateMisses = isset($step->dsl['match_tolerate_misses']) ? $this->referenceResolver->resolveReference($step->dsl['match_tolerate_misses']) : false;
+
+        return $this->userGroupMatcher->match($match, $tolerateMisses);
     }
 
     /**
      * @param UserGroup $userGroup
      * @param array $references the definitions of the references to set
-     * @throws \InvalidArgumentException When trying to assign a reference to an unsupported attribute
+     * @throws InvalidStepDefinitionException
      * @return array key: the reference names, values: the reference values
      *
      * @todo allow setting refs to all the attributes that can be gotten for Contents
@@ -211,7 +216,8 @@ class UserGroupManager extends RepositoryExecutor
     {
         $refs = array();
 
-        foreach ($references as $reference) {
+        foreach ($references as $key => $reference) {
+            $reference = $this->parseReferenceDefinition($key, $reference);
             switch ($reference['attribute']) {
                 case 'object_id':
                 case 'content_id':
@@ -240,7 +246,7 @@ class UserGroupManager extends RepositoryExecutor
                     } while (count($users));
                     break;
                 default:
-                    throw new \InvalidArgumentException('User Group Manager does not support setting references for attribute ' . $reference['attribute']);
+                    throw new InvalidStepDefinitionException('User Group Manager does not support setting references for attribute ' . $reference['attribute']);
             }
 
             $refs[$reference['identifier']] = $value;
